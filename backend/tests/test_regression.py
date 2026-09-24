@@ -117,6 +117,19 @@ def test_customer_lookup_returns_one_row():
 
 
 @needs_llm
+def test_ambiguous_show_bill_resolves_to_one_bill():
+    # regression: "show bill" with no number used to produce SQL with no
+    # transaction_id filter at all, and phrase.py then merged line items from
+    # many different bills under one fake header/total.
+    r = answer("show bill")
+    assert r["row_count"] > 0
+    distinct = {row.get("bill_no") for row in r["result"]}
+    assert len(distinct) == 1
+    exp = _one("SELECT MAX(transaction_id) m FROM transactions")["m"]
+    assert exp in distinct
+
+
+@needs_llm
 def test_bill_lookup_returns_all_line_items():
     p = plan("show me what was in bill #15000")
     rows = run_readonly(p["sql"], tuple(p.get("params", ())))
@@ -146,6 +159,30 @@ def test_needs_aggregation_flags_bare_filter():
                              "SELECT * FROM transactions WHERE ts >= '2026-08-27'")
     assert not needs_aggregation("how many bills today?",
                                  "SELECT COUNT(*) FROM transactions")
+
+
+def test_ambiguous_bill_sql_gets_transaction_id_filter():
+    from retail_llm.repair import ambiguous_single_bill_request, fix_ambiguous_bill_sql
+    bad_sql = ("SELECT t.transaction_id AS bill_no, p.name AS item FROM transactions t "
+               "JOIN transaction_items ti ON ti.transaction_id = t.transaction_id "
+               "JOIN products p ON p.product_id = ti.product_id ORDER BY t.ts DESC LIMIT 500")
+    assert ambiguous_single_bill_request("show bill", bad_sql)
+    fixed = fix_ambiguous_bill_sql("show bill", bad_sql)
+    assert "MAX(transaction_id)" in fixed
+    assert ambiguous_single_bill_request("show bill", fixed) is None
+    # an explicit number, or a "last/that" referent, is never touched
+    assert ambiguous_single_bill_request("show bill #15000", bad_sql) is None
+    assert ambiguous_single_bill_request("show the last bill", bad_sql) is None
+
+
+def test_phrase_rejects_mixed_bill_numbers():
+    from retail_llm.phrase import rows_to_sentence
+    rows = [
+        {"bill_no": 1, "item": "A", "quantity": 1, "line_total": 10, "total_amount": 10},
+        {"bill_no": 2, "item": "B", "quantity": 1, "line_total": 20, "total_amount": 20},
+    ]
+    ans = rows_to_sentence(rows, "show bill")
+    assert "Bill #1 —" not in ans  # must not fabricate a single-bill narrative
 
 
 def test_diagnose_catches_missing_category():

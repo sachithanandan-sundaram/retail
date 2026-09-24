@@ -168,8 +168,13 @@ def rows_to_sentence(rows: list, question: str = "") -> str:
         if len(rows) == 1 and vals:
             return "No — that isn't in the catalogue." if vals[0] == 0 else f"Yes — {vals[0]} in the catalogue."
 
-    # a bill (header columns repeated across one row per line item)
-    if "bill_no" in rows[0] and "item" in rows[0]:
+    # a bill (header columns repeated across one row per line item) -- only
+    # trust this shape if every row is actually the SAME bill; a small model's
+    # unfiltered join (no transaction_id restriction) can return line items
+    # from many different bills, and formatting that as "one bill" would
+    # silently misattribute other customers' items and totals.
+    if "bill_no" in rows[0] and "item" in rows[0] and \
+       all(r.get("bill_no") == rows[0].get("bill_no") for r in rows):
         h = rows[0]
         when = h.get("billed_at") or h.get("ts") or ""
         try:

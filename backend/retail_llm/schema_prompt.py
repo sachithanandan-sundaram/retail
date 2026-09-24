@@ -122,6 +122,12 @@ the CURRENT value of a column, not a date filter; products has no ts column at a
 Question: What items are below threshold right now?
 Answer: {{"intent": "data_query", "sql": "SELECT name, category, current_stock, reorder_threshold FROM products WHERE current_stock < reorder_threshold ORDER BY (reorder_threshold - current_stock) DESC LIMIT 200"}}
 
+Example ("show bill" names no number — it means ONE specific bill, so default to
+the most recent one; NEVER return line items with no transaction_id filter,
+that mixes rows from many different bills together):
+Question: show bill
+Answer: {{"intent": "data_query", "sql": "SELECT t.transaction_id AS bill_no, t.ts AS billed_at, t.bill_seconds, s.name AS cashier, c.name AS customer, p.name AS item, p.category, ti.quantity, ti.unit_price, ti.line_total, t.subtotal, t.discount_pct, t.total_amount, t.exception_type FROM transactions t JOIN staff s ON s.staff_id = t.cashier_id LEFT JOIN customers c ON c.customer_id = t.customer_id JOIN transaction_items ti ON ti.transaction_id = t.transaction_id JOIN products p ON p.product_id = ti.product_id WHERE t.transaction_id = (SELECT MAX(transaction_id) FROM transactions) ORDER BY ti.line_total DESC"}}
+
 Output ONLY the JSON object, nothing else."""
 
 from .tools import TOOL_SPEC as _TOOL_SPEC  # noqa: E402

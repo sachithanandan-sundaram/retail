@@ -198,6 +198,64 @@ def unrequested_date_filter(question: str, sql: str, has_range: bool):
     return None
 
 
+_SINGLE_BILL_RE = re.compile(
+    r"\b(show|view|see|display|open|get|find|what('?s| is| was)? in|details? (of|on)|"
+    r"give me|pull up)\b.{0,25}\b(the\s+|my\s+|a\s+)?(bill|invoice|receipt|transaction|order)\b|"
+    r"^\s*(bill|invoice|receipt)\b", re.I)
+_EXPLICIT_BILL_NUMBER_RE = re.compile(
+    r"\b(bill|invoice|receipt|transaction|order)\s*(?:no\.?|number|#)?\s*\d+|#\d+|"
+    r"\b(last|latest|most recent|newest|current|previous|that|this|same)\b.{0,15}"
+    r"\b(bill|invoice|receipt|transaction|order)\b", re.I)
+
+
+def _where_clause(sql: str) -> str:
+    m = re.search(r"\bWHERE\b(.*?)(\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)", sql, re.I | re.S)
+    return m.group(1) if m else ""
+
+
+def ambiguous_single_bill_request(question: str, sql: str):
+    """'show bill' with no number, no 'last/that/this' referent, and no history
+    to resolve it -- the question wants ONE specific bill, but nothing says
+    which. A small model then writes SQL with no transaction_id restriction at
+    all, which silently returns many different bills' line items mixed
+    together. Default it to the most recent bill rather than guessing.
+
+    Checks only the WHERE clause for a transaction_id restriction -- a JOIN's
+    `ON ti.transaction_id = t.transaction_id` also contains the word but
+    doesn't scope the result to one bill."""
+    if not _SINGLE_BILL_RE.search(question):
+        return None
+    if _EXPLICIT_BILL_NUMBER_RE.search(question):
+        return None
+    if re.search(r"\btransaction_id\b", _where_clause(sql), re.I):
+        return None
+    return ("the question wants to see a specific bill but names no bill number — "
+            "since none was given, default to the MOST RECENT one: filter "
+            "transaction_id = (SELECT MAX(transaction_id) FROM transactions), and "
+            "still join transaction_items/products for the full line-item detail.")
+
+
+def fix_ambiguous_bill_sql(question: str, sql: str) -> str:
+    """Deterministic safety net for ambiguous_single_bill_request: a 3B model
+    doesn't reliably reproduce the exact MAX(transaction_id) subquery from
+    feedback alone even after a retry, and an unfiltered/mis-filtered query
+    silently mixes rows from many different bills. Once the pattern is
+    confirmed (via the same check used for self-correction), force the fix
+    rather than keep asking the model to get it right."""
+    if not ambiguous_single_bill_request(question, sql):
+        return sql
+    m = re.search(r"\bFROM\s+transactions\s+(\w+)\b", sql, re.I)
+    alias = m.group(1) if m and m.group(1).lower() not in ("as", "where", "join") else "transactions"
+    filt = f"{alias}.transaction_id = (SELECT MAX(transaction_id) FROM transactions)"
+    if re.search(r"\bWHERE\b", sql, re.I):
+        return re.sub(r"\bWHERE\b.*?(?=\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
+                      f"WHERE {filt} ", sql, count=1, flags=re.I | re.S)
+    m2 = re.search(r"\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.I)
+    if m2:
+        return sql[:m2.start()] + f"WHERE {filt} " + sql[m2.start():]
+    return sql + f" WHERE {filt}"
+
+
 def wrong_time_grouping(question: str, sql: str):
     """'time of day' wants an hour grouping; 'day of week' wants weekday."""
     q = question.lower()
@@ -221,6 +279,9 @@ def diagnose(question: str, sql: str):
     if wrong_customer_profile_table(question, sql):
         return ("The question wants the customer's profile — SELECT from the customers "
                 "table (name, phone, visit_count, total_spend, ...), not transactions.")
+    amb_bill = ambiguous_single_bill_request(question, sql)
+    if amb_bill:
+        return amb_bill
     if needs_aggregation(question, sql):
         return ("This question asks for a computed figure (count/total/average/"
                 "ranking) but the SQL only filters rows. Use COUNT/SUM/AVG and "
