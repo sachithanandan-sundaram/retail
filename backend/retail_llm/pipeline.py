@@ -126,14 +126,36 @@ def _product_link_block(question) -> str:
     return "\n".join(lines)
 
 
+_CONTINUATION_RE = re.compile(
+    r"\bbreakdown\b|\bbreak down\b|\bsplit\b|\bby category\b|\bper category\b|"
+    r"\beach categor|\btop\b|\bwhich\b|\bcompare\b|\bacross\b", re.I)
+
+
+def _inherited_range(question, history, now_dt):
+    """A follow-up like 'breakdown by category' right after 'sales yesterday'
+    should still mean yesterday -- but only carry the prior turn's date scope
+    when the new question looks like an aggregate continuation (not a
+    lookup for something else, like a product price) and states no period of
+    its own."""
+    if not history or not _CONTINUATION_RE.search(question):
+        return None
+    prior_q = history[-1].get("question", "")
+    return extract_range(prior_q, now_dt)
+
+
 def _user_prompt(question, history, problem):
     from .config import LLM_BACKEND
     compact = LLM_BACKEND == "axelera"   # tight 1024-ctx build — keep it lean
 
     parts = [f"Question: {question}"]
     rng = extract_range(question, now())
+    inherited = False
+    if not rng:
+        rng = _inherited_range(question, history, now())
+        inherited = rng is not None
     if rng:
-        parts.append(f"Interpreted date range: {label(rng)}")
+        tag = " (carried over from the previous question — the follow-up names no period of its own)" if inherited else ""
+        parts.append(f"Interpreted date range: {label(rng)}{tag}")
     parts.append(f"Current date: {now().isoformat()}")
     pl = _product_link_block(question)
     if pl:
@@ -225,6 +247,7 @@ def _plan(question, history, stages):
                    "llama-cpp-python, or try again once it's warmed up.")
         raise QueryError(msg)
 
+    has_range = bool(extract_range(question, now()) or _inherited_range(question, history, now()))
     problem = None
     for attempt in range(2):
         try:
@@ -235,7 +258,7 @@ def _plan(question, history, stages):
         except (QueryError, ValidationError) as e:
             problem = f"the query was invalid ({e})"
             continue
-        pre = diagnose(question, sql)
+        pre = diagnose(question, sql, has_range=has_range)
         if pre and attempt == 0:
             problem = pre
             continue
@@ -290,12 +313,13 @@ def _resolve(question, history):
     _stage(stages, "Database execution", "Ran the query against the SQLite database.", t0)
 
     # self-correction: one regeneration if it errored or failed a check
+    has_range = bool(extract_range(question, now()) or _inherited_range(question, history, now()))
     for attempt in range(2):
         problem = None
         if exec_err:
             problem = f"the database rejected the query ({exec_err})"
         else:
-            problem = diagnose(question, plan["sql"])
+            problem = diagnose(question, plan["sql"], has_range=has_range)
         if not problem:
             break
         try:

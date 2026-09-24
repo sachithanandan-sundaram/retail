@@ -256,6 +256,26 @@ def fix_ambiguous_bill_sql(question: str, sql: str) -> str:
     return sql + f" WHERE {filt}"
 
 
+_BY_CATEGORY_RE = re.compile(
+    r"\bby\s+categor|\bper\s+categor|\bcategor(y|ies)[- ]?wise\b|\bcategory\s+breakdown\b|"
+    r"\bbreakdown\s+by\s+categor|\beach\s+categor|\bacross\s+categor", re.I)
+
+
+def wrong_category_source(question: str, sql: str):
+    """category lives on products, not transactions. A small model sometimes
+    writes `SELECT category ... FROM transactions` directly (which just
+    errors) instead of joining transaction_items + products."""
+    if not _BY_CATEGORY_RE.search(question):
+        return None
+    if not re.search(r"\bcategory\b", sql, re.I):
+        return None
+    if re.search(r"\bproducts\b", sql, re.I) and re.search(r"\btransaction_items\b", sql, re.I):
+        return None
+    return ("category is a column on products, not transactions — join "
+            "transaction_items (ti.transaction_id = t.transaction_id) and "
+            "products (p.product_id = ti.product_id), then group by p.category.")
+
+
 def wrong_time_grouping(question: str, sql: str):
     """'time of day' wants an hour grouping; 'day of week' wants weekday."""
     q = question.lower()
@@ -269,8 +289,12 @@ def wrong_time_grouping(question: str, sql: str):
     return None
 
 
-def diagnose(question: str, sql: str):
-    """Return a human-readable problem string to feed back to the model, or None."""
+def diagnose(question: str, sql: str, has_range: bool | None = None):
+    """Return a human-readable problem string to feed back to the model, or
+    None. `has_range` lets a caller that knows about conversation context
+    (e.g. a follow-up inheriting the previous turn's date scope) override the
+    question-only date-range check below; when omitted it's computed from the
+    question text alone, same as before."""
     items_date = wrong_items_date_column(sql)
     if items_date:
         return items_date
@@ -282,6 +306,9 @@ def diagnose(question: str, sql: str):
     amb_bill = ambiguous_single_bill_request(question, sql)
     if amb_bill:
         return amb_bill
+    wc = wrong_category_source(question, sql)
+    if wc:
+        return wc
     if needs_aggregation(question, sql):
         return ("This question asks for a computed figure (count/total/average/"
                 "ranking) but the SQL only filters rows. Use COUNT/SUM/AVG and "
@@ -294,9 +321,10 @@ def diagnose(question: str, sql: str):
     tg = wrong_time_grouping(question, sql)
     if tg:
         return f"The question asks about time patterns — {tg}."
-    from .dates import extract_range
-    from .config import now
-    has_range = bool(extract_range(question, now()))
+    if has_range is None:
+        from .dates import extract_range
+        from .config import now
+        has_range = bool(extract_range(question, now()))
     udf = unrequested_date_filter(question, sql, has_range)
     if udf:
         return udf

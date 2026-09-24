@@ -85,7 +85,10 @@ Rules:
   totals; a sum and a count) as two plain aggregate columns, or two rows via
   UNION ALL. A separate deterministic step outside the model computes the
   actual percentage/ratio/margin exactly from those numbers.
-- Use the date range given in "Interpreted date range" verbatim when present.
+- Use the date range given in "Interpreted date range" verbatim when present —
+  including one marked "(carried over from the previous question)": a
+  follow-up like "breakdown by category" right after "sales yesterday" still
+  means yesterday, not all-time, even though it names no period itself.
 - Return column aliases a human would want to read (e.g. AS revenue, AS bill_count).
 - For a product named by the user: if "Product(s) the question names" is given,
   filter by those product_id value(s); otherwise call find_product, or as a last
@@ -127,6 +130,14 @@ the most recent one; NEVER return line items with no transaction_id filter,
 that mixes rows from many different bills together):
 Question: show bill
 Answer: {{"intent": "data_query", "sql": "SELECT t.transaction_id AS bill_no, t.ts AS billed_at, t.bill_seconds, s.name AS cashier, c.name AS customer, p.name AS item, p.category, ti.quantity, ti.unit_price, ti.line_total, t.subtotal, t.discount_pct, t.total_amount, t.exception_type FROM transactions t JOIN staff s ON s.staff_id = t.cashier_id LEFT JOIN customers c ON c.customer_id = t.customer_id JOIN transaction_items ti ON ti.transaction_id = t.transaction_id JOIN products p ON p.product_id = ti.product_id WHERE t.transaction_id = (SELECT MAX(transaction_id) FROM transactions) ORDER BY ti.line_total DESC"}}
+
+Example (category is a products column, never a transactions column — always
+JOIN transaction_items + products to group by it. This follow-up's date range
+is marked "carried over" from the PRIOR question — still filter by it, exactly
+like a range you extracted yourself):
+Question: breakdown by category
+Interpreted date range: 2026-08-26T00:00:00 .. 2026-08-27T00:00:00 (carried over from the previous question — the follow-up names no period of its own)
+Answer: {{"intent": "data_query", "sql": "SELECT p.category, ROUND(SUM(ti.line_total),2) AS revenue, SUM(ti.quantity) AS units FROM transaction_items ti JOIN transactions t ON t.transaction_id = ti.transaction_id JOIN products p ON p.product_id = ti.product_id WHERE t.ts >= '2026-08-26T00:00:00' AND t.ts < '2026-08-27T00:00:00' GROUP BY p.category ORDER BY revenue DESC LIMIT 40"}}
 
 Output ONLY the JSON object, nothing else."""
 

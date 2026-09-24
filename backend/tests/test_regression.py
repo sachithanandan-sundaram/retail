@@ -185,6 +185,17 @@ def test_phrase_rejects_mixed_bill_numbers():
     assert "Bill #1 —" not in ans  # must not fabricate a single-bill narrative
 
 
+def test_diagnose_catches_category_on_wrong_table():
+    from retail_llm.repair import wrong_category_source
+    bad = "SELECT category, SUM(total_amount) FROM transactions GROUP BY category"
+    assert wrong_category_source("breakdown by category", bad)
+    good = ("SELECT p.category, SUM(ti.line_total) FROM transaction_items ti "
+            "JOIN transactions t ON t.transaction_id = ti.transaction_id "
+            "JOIN products p ON p.product_id = ti.product_id GROUP BY p.category")
+    assert wrong_category_source("breakdown by category", good) is None
+    assert wrong_category_source("what was total revenue today", bad) is None
+
+
 def test_diagnose_catches_missing_category():
     d = diagnose("how many Beverages did we sell",
                  "SELECT COUNT(*) FROM transaction_items")
@@ -340,3 +351,17 @@ def test_typo_question_still_answers():
     r = answer("what was the revenu today")
     assert r["intent"] == "data_query"
     assert r["sql"]
+
+
+@needs_llm
+def test_breakdown_by_category_follow_up_keeps_date_scope_and_joins_products():
+    # regression: "breakdown by category" right after "sales yesterday" was
+    # either erroring (SELECT category FROM transactions -- no such column)
+    # or silently losing the "yesterday" scope and returning all-time totals.
+    history = []
+    r1 = answer("sales yesterday", history)
+    history.append({"question": "sales yesterday", "sql": r1["sql"], "answer": r1["answer"]})
+    r2 = answer("breakdown by category", history)
+    assert "category" in r2["sql"].lower()
+    assert "products" in r2["sql"].lower() and "transaction_items" in r2["sql"].lower()
+    assert "2026-08-26" in r2["sql"] and "2026-08-27" in r2["sql"]
