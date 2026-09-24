@@ -1,0 +1,29 @@
+# --- web API + tests ---
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2
+pytest>=8
+requests>=2.31        # regression suite HTTP client
+python-multipart>=0.0.9  # /speech-to-text form upload
+
+# --- LLM query/answer path (optional; fast paths work without it) ---
+# llama.cpp's CUDA build needs cudart/cublas DLLs. This project borrows
+# PyTorch's bundled copies at runtime (retail_llm/llm.py adds torch/lib to the
+# DLL search path), so install BOTH from their CUDA wheel indexes:
+#
+#   python -m venv .venv && .venv\Scripts\activate
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+#   pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+#
+# CPU-only fallback (slower, no torch needed):
+#   pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+#
+# PIN 0.3.4: newer prebuilt wheels (0.3.35) are compiled with AVX-512 and crash
+# with WinError 0xc000001d on Alder Lake CPUs (i7-12650H etc. — AVX-512 fused
+# off). 0.3.4's wheel is AVX2-only and runs fine.
+torch==2.5.1
+llama-cpp-python==0.3.4
+
+# --- voice input for the chat widget (optional; hold Space to talk) ---
+# Whisper "base" model auto-downloads (~150 MB) on first use.
+faster-whisper>=1.1

@@ -1,0 +1,22 @@
+# Deps for running on the Axelera Metis host.
+#
+# Install these INTO the Voyager SDK's own venv, not a separate one — the
+# process needs `axelera.llm` (from the SDK) and these importable at once:
+#
+#   source /voyager-sdk/axelera-env/bin/activate
+#   pip install -r requirements-axelera.txt
+#
+# NOTE: no torch / llama-cpp-python here — the Metis card replaces them.
+# `axelera.llm` itself comes with the Voyager SDK.
+
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2
+python-multipart>=0.0.9
+
+# voice input (host CPU, no GPU) — optional
+faster-whisper>=1.1
+
+# tests (optional on the host)
+pytest>=8
+requests>=2.31

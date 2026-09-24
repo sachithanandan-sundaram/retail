@@ -1,0 +1,35 @@
+# Run the retail LLM service in a container on the Axelera Metis host.
+#
+#   export VOYAGER_SDK_ROOT=/path/to/voyager-sdk
+#   docker compose -f deploy/docker-compose.yml up --build
+#
+# The container borrows the host's SDK venv and full /dev (axllm device
+# discovery needs broad access — same as Axelera's own examples).
+services:
+  retail-llm:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: retail-llm:latest
+    privileged: true                       # axllm device discovery
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${VOYAGER_SDK_ROOT:?set VOYAGER_SDK_ROOT}:/voyager-sdk
+      - /dev:/dev                           # full /dev, not a single --device
+      - retail-build:/voyager-sdk/build     # persist downloaded/compiled weights
+    environment:
+      RETAIL_LLM_BACKEND: axelera
+      VOYAGER_SDK_ROOT: /voyager-sdk
+      AXELERA_DEVICE: "0"
+      RETAIL_AXELERA_YAML: /voyager-sdk/ax_models/zoo/llm/llama-3-2-3b-1024-4core-static.yaml
+      RETAIL_NOW: "2026-08-27T20:00:00"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  retail-build:

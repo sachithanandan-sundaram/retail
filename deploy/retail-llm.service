@@ -1,0 +1,39 @@
+# /etc/systemd/system/retail-llm.service
+#
+#   sudo cp deploy/retail-llm.service /etc/systemd/system/
+#   # edit the paths + User below to match the host, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now retail-llm
+#   journalctl -u retail-llm -f
+#
+[Unit]
+Description=Retail LLM query service (Axelera Metis)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=axelera
+Group=axelera
+
+# --- edit these three for your host ---
+Environment=VOYAGER_SDK_ROOT=/voyager-sdk
+WorkingDirectory=/opt/retail/backend
+EnvironmentFile=/opt/retail/deploy/retail-llm.env
+# -------------------------------------
+
+# MUST source the SDK's activate script — it sets AIPU_FIRMWARE_OMEGA,
+# AIPU_RUNTIME_STAGE0_OMEGA, LD_LIBRARY_PATH, PYTHONPATH, etc. Without them the
+# axllm runtime can't locate the device firmware and reports the Metis card as
+# 0 GB DDR ("requires a card with at least 4 GB..."). EnvironmentFile alone is
+# not enough. Adjust the two paths for your host.
+ExecStart=/bin/bash -lc 'cd /voyager-sdk && source venv/bin/activate && cd /opt/retail/backend && exec python -m uvicorn retail_llm.server:app --host 0.0.0.0 --port 8000'
+
+Restart=on-failure
+RestartSec=5
+# first model load (weights download + compile cache) can take minutes;
+# the warm-up runs in a background thread (and retries on failure) so the
+# process is "up" immediately.
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,45 @@
+:root {
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #f5f5f7;
+  --panel-bg: #ffffff;
+  --border: #e5e4e7;
+  --accent: #1d5a96;
+  --accent-bg: rgba(29, 90, 150, 0.1);
+  --user-bubble: #1d5a96;
+  --user-bubble-text: #ffffff;
+  --shadow: rgba(0, 0, 0, 0.08) 0 4px 12px -2px;
+
+  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  /* the app commits to a light theme (dashboard + assistant both light) */
+  font: 16px/145% var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+#root {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+h1,
+h2,
+h3 {
+  font-weight: 600;
+  color: var(--text-h);
+  margin: 0;
+}
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
