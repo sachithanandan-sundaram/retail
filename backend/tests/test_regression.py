@@ -233,6 +233,42 @@ def test_spellcheck_leaves_product_names_and_common_words_alone():
 
 
 # --------------------------------------------------------------------------
+# report layer (deterministic, no LLM needed -- multi-query sales reports)
+# --------------------------------------------------------------------------
+from retail_llm import report
+
+
+def test_report_detects_all_period_kinds():
+    assert report._kind("monthly sales report") == "month"
+    assert report._kind("weekly report") == "week"
+    assert report._kind("quarterly report") == "quarter"
+    assert report._kind("yearly report") == "year"
+    assert report._kind("daily report") == "day"
+    assert not report.is_report_request("what was total revenue today")
+
+
+def test_report_builds_facets_and_summary():
+    rep = report.build("give a monthly sales report for the month of august 2026", now())
+    assert rep is not None
+    assert "August 2026" in rep["answer"]
+    assert "Rs" in rep["answer"]
+    facets = rep["result"][0]
+    for key in ("top_categories", "top_products", "top_cashiers",
+                "revenue_by_weekday", "revenue_by_hour"):
+        assert key in facets and isinstance(facets[key], list)
+    exp = _one("SELECT ROUND(SUM(total_amount),2) r, COUNT(*) c FROM transactions "
+               "WHERE ts >= '2026-08-01T00:00:00' AND ts < '2026-09-01T00:00:00'")
+    assert str(exp["c"]) in rep["answer"].replace(",", "")
+
+
+def test_report_works_without_llm():
+    # a report is pure SQL + Python, so it must not require llm.available()
+    r = answer("give me a yearly sales report")
+    assert r["source"] == "report"
+    assert r["result"][0]["top_categories"]
+
+
+# --------------------------------------------------------------------------
 # pipeline: intents, stages, answer shape
 # --------------------------------------------------------------------------
 def test_greeting_intent_short_circuits():

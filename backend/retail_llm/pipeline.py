@@ -16,6 +16,7 @@ import time
 from . import llm
 from . import maths
 from . import phrase as _phrase
+from . import report
 from . import spellcheck
 from . import tools
 from .config import now
@@ -263,6 +264,17 @@ def _resolve(question, history):
            f"Classified the message as '{intent}'.", t0)
     if intent != "data_query":
         return None, [], stages, intent
+
+    if report.is_report_request(question):
+        t0 = time.time()
+        rep = report.build(question, now())
+        _stage(stages, "Report generation",
+               "Ran several deterministic SQL queries (revenue, top categories/products/"
+               "cashiers, peak day/hour, exceptions, footfall) and composed a report — "
+               "no model call needed.", t0)
+        plan = {"sql": rep["sql"], "params": [], "source": rep["source"], "explanation": "",
+                "computed": {"sentence": rep["answer"], "note": "report composed deterministically"}}
+        return plan, rep["result"], stages, intent
 
     plan = _plan(question, history, stages)
 

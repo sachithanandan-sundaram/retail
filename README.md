@@ -58,11 +58,22 @@ question (+ last 4 conversation turns)
   -> answer + per-stage lifecycle timings
 ```
 
-The LLM writes every query — there are no deterministic fast-path SQL shortcuts —
-but it never computes an answer itself: any percentage, share, margin, growth
-rate or average is worked out by `retail_llm/maths.py` in exact Python
-arithmetic from the raw component numbers the SQL returns, and that layer's
-sentence is used verbatim (the model doesn't get a chance to recompute it).
+The LLM writes every single-question query — there are no deterministic
+fast-path SQL shortcuts — but it never computes an answer itself: any
+percentage, share, margin, growth rate or average is worked out by
+`retail_llm/maths.py` in exact Python arithmetic from the raw component
+numbers the SQL returns, and that layer's sentence is used verbatim (the model
+doesn't get a chance to recompute it).
+
+A **"report"** request ("monthly sales report", "quarterly report", "weekly
+report for last week", "yearly report", "daily report") is handled entirely
+differently, by `retail_llm/report.py`: several targeted SQL queries (revenue
+vs the previous period, top categories/products/cashiers, busiest day/hour,
+exceptions, footfall) are run and composed into a multi-section summary — no
+model call at all, so a report works even without the LLM loaded. The
+breakdown tables ride along as `result` facets that the chat widget renders
+as titled tables under the summary.
+
 The **dashboard** (`/dashboard`) and **bill lookup** (`/bill/{n}`) paths are
 100% deterministic SQL, no LLM.
 
