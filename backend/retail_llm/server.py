@@ -168,8 +168,8 @@ def health():
 
 @app.get("/ready")
 def ready():
-    """Readiness — the model has finished loading. Fast paths work before
-    this is true; the general LLM query path does not."""
+    """Readiness — the model has finished loading. No data question can be
+    answered before this is true (there are no fast-path shortcuts)."""
     loaded = llm.available()
     payload = {
         "ready": loaded,

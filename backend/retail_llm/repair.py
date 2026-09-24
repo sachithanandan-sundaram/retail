@@ -140,6 +140,64 @@ def missing_exception_filter(question: str, sql: str) -> bool:
     return False
 
 
+def wrong_items_date_column(sql: str):
+    """transaction_items has no ts/date column — a small model's most common
+    join mistake is filtering `<items_alias>.ts` directly. Catch it before
+    execution (it would otherwise just error) and name the exact fix."""
+    m = re.search(r"\btransaction_items\s+(?:as\s+)?(\w+)\b", sql, re.I)
+    if not m:
+        return None
+    alias = m.group(1)
+    if alias.lower() in ("as", "on", "where", "group", "order", "join"):
+        return None
+    if re.search(rf"\b{re.escape(alias)}\.ts\b", sql, re.I):
+        return (f"`{alias}` is transaction_items, which has no ts column — join "
+                f"transactions and filter on ITS alias's ts instead.")
+    return None
+
+
+def wrong_footfall_aggregation(question: str, sql: str) -> bool:
+    """'total footfall' needs SUM(count) — COUNT(*) counts hourly rows, not
+    people, and always undercounts."""
+    q = question.lower()
+    if not re.search(r"\bfootfall\b|\bfoot\s*traffic\b", q):
+        return False
+    if "footfall" not in sql.lower():
+        return False
+    return bool(re.search(r"count\s*\(\s*\*\s*\)", sql, re.I)) and \
+        not re.search(r"sum\s*\(\s*\w*\.?count\s*\)", sql, re.I)
+
+
+def wrong_customer_profile_table(question: str, sql: str) -> bool:
+    """'everything about / profile of / who is customer X' wants the customers
+    row, not their transactions."""
+    q = question.lower()
+    if not re.search(r"\b(everything about|profile of|who is)\b.*\bcustomer\b", q):
+        return False
+    low = sql.lower()
+    return "from customers" not in low and "join customers" not in low
+
+
+def unrequested_date_filter(question: str, sql: str, has_range: bool):
+    """A question with no date wording and no interpreted range shouldn't get
+    a ts/date_added/last_sold_date filter — a small model sometimes adds
+    'today' out of habit (e.g. treating 'right now' as a date filter instead
+    of 'current column value')."""
+    if has_range:
+        return None
+    q = question.lower()
+    if re.search(r"\b(today|yesterday|this week|last week|this month|last month|"
+                 r"this year|last year|this quarter|last quarter|since|between|"
+                 r"from .+ to |on \d|in the last|past \d)\b", q):
+        return None
+    if re.search(r"\b(date_added|last_sold_date)\s*(>=|<=|>|<|=)", sql, re.I) or \
+       re.search(r"\bts\s*(>=|<=|>|<|=)\s*'\d{4}-\d{2}-\d{2}", sql, re.I):
+        return ("the question doesn't ask for a specific date/period, but the SQL "
+                "filters by one anyway — drop that date filter (e.g. 'right now' "
+                "means the current value of a column, not a date range).")
+    return None
+
+
 def wrong_time_grouping(question: str, sql: str):
     """'time of day' wants an hour grouping; 'day of week' wants weekday."""
     q = question.lower()
@@ -155,6 +213,14 @@ def wrong_time_grouping(question: str, sql: str):
 
 def diagnose(question: str, sql: str):
     """Return a human-readable problem string to feed back to the model, or None."""
+    items_date = wrong_items_date_column(sql)
+    if items_date:
+        return items_date
+    if wrong_footfall_aggregation(question, sql):
+        return "footfall needs SUM(count), not COUNT(*) — COUNT(*) counts hours, not people."
+    if wrong_customer_profile_table(question, sql):
+        return ("The question wants the customer's profile — SELECT from the customers "
+                "table (name, phone, visit_count, total_spend, ...), not transactions.")
     if needs_aggregation(question, sql):
         return ("This question asks for a computed figure (count/total/average/"
                 "ranking) but the SQL only filters rows. Use COUNT/SUM/AVG and "
@@ -167,4 +233,10 @@ def diagnose(question: str, sql: str):
     tg = wrong_time_grouping(question, sql)
     if tg:
         return f"The question asks about time patterns — {tg}."
+    from .dates import extract_range
+    from .config import now
+    has_range = bool(extract_range(question, now()))
+    udf = unrequested_date_filter(question, sql, has_range)
+    if udf:
+        return udf
     return None

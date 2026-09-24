@@ -35,7 +35,10 @@ def extract_range(text: str, now: datetime):
     t = text.lower().strip()
 
     # --- explicit "today / yesterday" -----------------------------------
-    if re.search(r"\btoday\b|\bso far today\b|\bright now\b", t):
+    # NOTE: deliberately NOT matching "right now" / "currently" / "at the
+    # moment" here -- those describe the present value of a column (e.g.
+    # current_stock), not a request to filter by date. See schema_prompt.py.
+    if re.search(r"\btoday\b|\bso far today\b", t):
         s = _day_start(now)
         return (s, s + timedelta(days=1))
     if re.search(r"\byesterday\b", t):

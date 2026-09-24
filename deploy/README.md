@@ -2,8 +2,12 @@
 
 Runs the query/answer LLM on a **Metis card** with **Llama-3.2-3B** (Voyager
 SDK zoo model) instead of the dev box's local llama.cpp / Qwen2.5-3B. Everything
-else — the SQLite DB, dashboard, fast paths, deterministic layers, frontend —
-is unchanged.
+else — the SQLite DB, dashboard, deterministic layers, frontend — is unchanged.
+
+There are no fast-path SQL shortcuts (removed) — every data question goes
+through the model. The model must be loaded/ready for any data question to be
+answered; the dashboard and bill-lookup endpoints remain separate and
+model-free.
 
 ## What switches with `RETAIL_LLM_BACKEND=axelera`
 
@@ -19,9 +23,10 @@ is unchanged.
 | row cap into phrasing prompt | 40 | 10; deterministic phrasing for >6-row tables |
 | voice (`faster-whisper`) | GPU/auto | CPU / int8 / `base` |
 
-Fast paths, `find_product` value-linking, date override, SQL repair,
-self-correction, and the answer safety-net are **backend-independent** — they
-do most of the reliability work regardless of which model writes the SQL.
+`find_product` value-linking, date override, SQL repair, self-correction, the
+deterministic maths layer (percentage/margin/growth/average), spelling
+correction and the answer safety-net are all **backend-independent** — they do
+most of the reliability work regardless of which model writes the SQL.
 
 ## Prerequisites (on the host)
 
@@ -69,8 +74,8 @@ curl http://HOST:8000/ready      # 503 until the model finishes loading, then {"
 - `/health` answers immediately; the model warms up in a background thread.
 - **First load is slow** (weights download + MD5 + compile-cache) — minutes.
   Every load after is fast (`~0.75 s` TTFT for this build).
-- Fast-path questions ("revenue today", "below threshold") work **before**
-  `/ready` is true. The general LLM query path returns a clear error until then.
+- Every data question needs the model — there's no fast-path shortcut anymore,
+  so the query path returns a clear "still loading" error until `/ready` is true.
 
 Open `http://HOST:8000/` for the dashboard + chat.
 
@@ -78,7 +83,6 @@ Open `http://HOST:8000/` for the dashboard + chat.
 
 - clean first-try query: ~1.5–2.5 s end to end
 - with one self-correction retry: ~9–12 s
-- fast paths: <10 ms
 
 ## Gotchas carried into the code
 

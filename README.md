@@ -45,21 +45,26 @@ Retail/
 
 ```
 question (+ last 4 conversation turns)
+  -> spelling correction        retail-domain vocabulary (categories, terms), typo-tolerant
   -> classify intent            greeting / unsupported / data_query
-  -> fast path?  ── yes ───────────────────────────────► run SQL ─► phrase (deterministic)
   -> LLM #1 writes a SQL SELECT  (schema-aware prompt, interpreted date range injected)
   -> validate + repair          (SELECT-only, single statement, row cap)
   -> run against SQLite
   -> self-correction check       DB error? needs aggregation? category filter? time grouping?
        └─ fails once ─► regenerate with the problem explained back to the model, re-run
-  -> LLM #2 phrases the rows (streamed token-by-token)
+  -> deterministic maths layer   percentage / share / margin / growth / average — Python, not the LLM
+  -> LLM #2 phrases the rows (streamed token-by-token), or the maths layer's ready-made sentence
   -> deterministic safety net    no invented values, no dropped values, no false "no data"
   -> answer + per-stage lifecycle timings
 ```
 
-The LLM never computes an answer — it only writes a query that is executed for
-real, then describes the rows that came back. The **dashboard** (`/dashboard`)
-and **bill lookup** (`/bill/{n}`) paths are 100% deterministic SQL, no LLM.
+The LLM writes every query — there are no deterministic fast-path SQL shortcuts —
+but it never computes an answer itself: any percentage, share, margin, growth
+rate or average is worked out by `retail_llm/maths.py` in exact Python
+arithmetic from the raw component numbers the SQL returns, and that layer's
+sentence is used verbatim (the model doesn't get a chance to recompute it).
+The **dashboard** (`/dashboard`) and **bill lookup** (`/bill/{n}`) paths are
+100% deterministic SQL, no LLM.
 
 The chat widget streams over Server-Sent Events (`/chat/stream`): a `meta` event
 with the SQL + result the moment the query runs, then `token` events as the
@@ -89,8 +94,9 @@ with that interpreter to enable the LLM path:
 d:/WG/slm-main/.venv/Scripts/python.exe -m uvicorn retail_llm.server:app --port 8000
 ```
 
-Without the model, the ~30 **deterministic fast paths** still cover every
-confirmed demo question — the LLM is only the fallback for everything else.
+There are no fast paths — the LLM must be loaded for any data question to be
+answered (the dashboard and bill lookup still work without it, since those are
+separate deterministic endpoints).
 
 ## Run
 

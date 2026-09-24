@@ -46,6 +46,18 @@ Notes:
 - A "billing exception" is a transactions row with is_exception = 1.
 - "unsold for N days" / "dead stock" compares products.last_sold_date (or the
   latest transaction_items sale) to the current date.
+- "total footfall" = SUM(count), NEVER COUNT(*) — COUNT(*) counts hourly rows,
+  not people. Each footfall row already IS an hour; count holds the people.
+- transaction_items has NO ts/date column. To filter items/products sold by
+  date, JOIN transactions and filter on the transactions alias's ts — never
+  write `<items_alias>.ts`.
+- "everything about / profile of / who is customer X" means the customers
+  table row for that customer_id (name, phone, visit_count, total_spend, ...),
+  NOT their transactions.
+- Do NOT add a date/time filter (ts, date_added, last_sold_date, ...) unless
+  the question asks for one, or an "Interpreted date range" is given below.
+  "right now" / "currently" / "at the moment" describe present column values
+  (e.g. current_stock) — they are NOT a request to filter by date.
 """
 
 QUERY_SYSTEM_PROMPT = f"""You are a retail-analytics query-writing assistant.
@@ -104,6 +116,11 @@ Answer: {{"intent": "data_query", "sql": "SELECT (SELECT ROUND(SUM(ti.line_total
 Example (margin — return price and cost, do NOT compute the margin yourself):
 Question: What's the profit margin on product_id 214?
 Answer: {{"intent": "data_query", "sql": "SELECT name, price, cost FROM products WHERE product_id = 214"}}
+
+Example (no date wording, no "Interpreted date range" given — "right now" means
+the CURRENT value of a column, not a date filter; products has no ts column at all):
+Question: What items are below threshold right now?
+Answer: {{"intent": "data_query", "sql": "SELECT name, category, current_stock, reorder_threshold FROM products WHERE current_stock < reorder_threshold ORDER BY (reorder_threshold - current_stock) DESC LIMIT 200"}}
 
 Output ONLY the JSON object, nothing else."""
 
