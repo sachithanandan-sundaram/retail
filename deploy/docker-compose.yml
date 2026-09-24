@@ -23,7 +23,7 @@ services:
       VOYAGER_SDK_ROOT: /voyager-sdk
       AXELERA_DEVICE: "0"
       RETAIL_AXELERA_YAML: /voyager-sdk/ax_models/zoo/llm/llama-3-2-3b-1024-4core-static.yaml
-      RETAIL_NOW: "2026-08-27T20:00:00"
+      # RETAIL_NOW: "2026-08-27T20:00:00"   # uncomment to pin "now" for a reproducible demo
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]

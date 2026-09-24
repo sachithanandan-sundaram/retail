@@ -6,5 +6,6 @@ node_modules/
 frontend/dist/
 models/
 retail.db
+retail.db.bak*
 chat.zip
 *.gguf

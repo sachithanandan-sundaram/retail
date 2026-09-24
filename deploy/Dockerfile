@@ -25,11 +25,12 @@ COPY retail.db /app/retail.db
 COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
+# Set RETAIL_NOW (e.g. -e RETAIL_NOW=2026-08-27T20:00:00) to pin "now" for a
+# reproducible demo; unset (the default here), it tracks the real clock.
 ENV RETAIL_LLM_BACKEND=axelera \
     VOYAGER_SDK_ROOT=/voyager-sdk \
     AXELERA_DEVICE=0 \
-    RETAIL_DB_PATH=/app/retail.db \
-    RETAIL_NOW=2026-08-27T20:00:00
+    RETAIL_DB_PATH=/app/retail.db
 
 EXPOSE 8000
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
