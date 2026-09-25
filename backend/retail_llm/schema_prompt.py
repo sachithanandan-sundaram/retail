@@ -89,6 +89,11 @@ Rules:
   including one marked "(carried over from the previous question)": a
   follow-up like "breakdown by category" right after "sales yesterday" still
   means yesterday, not all-time, even though it names no period itself.
+- For a two-period comparison ("X vs Y"), you'll be given BOTH ranges as
+  "Interpreted date ranges for this comparison — first = ...; second = ...".
+  Use each exactly as given in its own subquery/branch. NEVER compute the
+  second period yourself (e.g. "last week" is NOT "the month before this
+  week") — if both ranges aren't given, don't attempt the comparison.
 - Return column aliases a human would want to read (e.g. AS revenue, AS bill_count).
 - For a product named by the user: if "Product(s) the question names" is given,
   filter by those product_id value(s); otherwise call find_product, or as a last
@@ -130,6 +135,12 @@ the most recent one; NEVER return line items with no transaction_id filter,
 that mixes rows from many different bills together):
 Question: show bill
 Answer: {{"intent": "data_query", "sql": "SELECT t.transaction_id AS bill_no, t.ts AS billed_at, t.bill_seconds, s.name AS cashier, c.name AS customer, p.name AS item, p.category, ti.quantity, ti.unit_price, ti.line_total, t.subtotal, t.discount_pct, t.total_amount, t.exception_type FROM transactions t JOIN staff s ON s.staff_id = t.cashier_id LEFT JOIN customers c ON c.customer_id = t.customer_id JOIN transaction_items ti ON ti.transaction_id = t.transaction_id JOIN products p ON p.product_id = ti.product_id WHERE t.transaction_id = (SELECT MAX(transaction_id) FROM transactions) ORDER BY ti.line_total DESC"}}
+
+Example (a two-period comparison — use BOTH given ranges verbatim, never
+compute the second one yourself):
+Question: Total revenue this week vs last week
+Interpreted date ranges for this comparison — first = 2026-08-24T00:00:00 .. 2026-08-31T00:00:00; second = 2026-08-17T00:00:00 .. 2026-08-24T00:00:00. Use each verbatim in its own subquery/branch; do not compute either one yourself.
+Answer: {{"intent": "data_query", "sql": "SELECT 'this week' AS period, ROUND(SUM(total_amount),2) AS revenue FROM transactions WHERE ts >= '2026-08-24T00:00:00' AND ts < '2026-08-31T00:00:00' UNION ALL SELECT 'last week', ROUND(SUM(total_amount),2) FROM transactions WHERE ts >= '2026-08-17T00:00:00' AND ts < '2026-08-24T00:00:00'"}}
 
 Example (category is a products column, never a transactions column — always
 JOIN transaction_items + products to group by it. This follow-up's date range

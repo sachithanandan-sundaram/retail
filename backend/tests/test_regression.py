@@ -353,6 +353,41 @@ def test_typo_question_still_answers():
     assert r["sql"]
 
 
+def test_extract_json_recovers_from_stray_trailing_characters():
+    # regression: a longer SQL (two subqueries) sometimes trips the model into
+    # appending a stray char right before the closing brace, e.g.
+    # `...AS last_week_revenue")}` -- the object as a whole won't json.loads,
+    # but the "sql" field itself is still an intact double-quoted string.
+    from retail_llm.pipeline import _extract_json
+    raw = ('{"intent": "data_query", "sql": "SELECT (SELECT 1 FROM t WHERE '
+           'x = \'a\') AS this_week, (SELECT 2 FROM t WHERE x = \'b\') AS '
+           'last_week")}')
+    obj = _extract_json(raw)
+    assert obj["sql"].startswith("SELECT (SELECT 1")
+    assert "last_week" in obj["sql"]
+
+
+def test_compare_ranges_computes_both_periods_independently():
+    from retail_llm.pipeline import _compare_ranges
+    from retail_llm.config import now
+    ranges = _compare_ranges("Total revenue this week vs last week", now())
+    assert ranges is not None
+    (a1, b1), (a2, b2) = ranges
+    assert (b1 - a1).days == 7 and (b2 - a2).days == 7
+    assert a2 < a1  # "last week" starts before "this week"
+    assert (a1 - a2).days == 7  # exactly the week immediately before, not a month
+
+
+@needs_llm
+def test_week_vs_week_comparison_uses_correct_seven_day_windows():
+    # regression: the model computed "last week" as a full month back
+    # (2026-07-24..2026-08-24) instead of the 7 days before this week.
+    r = answer("Total revenue this week vs last week")
+    assert "2026-08-17" in r["sql"] and "2026-08-24" in r["sql"] and "2026-08-31" in r["sql"]
+    distinct_periods = {row.get("period") for row in r["result"]}
+    assert len(distinct_periods) == 2
+
+
 @needs_llm
 def test_breakdown_by_category_follow_up_keeps_date_scope_and_joins_products():
     # regression: "breakdown by category" right after "sales yesterday" was

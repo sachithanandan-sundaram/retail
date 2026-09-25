@@ -89,6 +89,9 @@ def _stage(stages, name, description, t0):
 # --------------------------------------------------------------------------
 # query generation
 # --------------------------------------------------------------------------
+_FIELD_RE = re.compile(r'"(sql|tool|query)"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
 def _extract_json(raw: str) -> dict:
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     if not m:
@@ -100,6 +103,14 @@ def _extract_json(raw: str) -> dict:
             return json.loads(candidate)
         except json.JSONDecodeError:
             continue
+    # A longer SQL (e.g. two subqueries for a period comparison) sometimes
+    # trips the model into appending stray characters right before the
+    # closing brace -- the JSON as a whole won't parse, but the fields
+    # themselves are still intact double-quoted strings. Recover those
+    # directly rather than discarding a perfectly good query.
+    fields = dict(_FIELD_RE.findall(m.group(0)))
+    if "sql" in fields or "tool" in fields:
+        return {k: json.loads(f'"{v}"') for k, v in fields.items()}
     raise QueryError("bad JSON from model")
 
 
@@ -143,19 +154,45 @@ def _inherited_range(question, history, now_dt):
     return extract_range(prior_q, now_dt)
 
 
+_COMPARE_SPLIT_RE = re.compile(r"\s+(?:vs\.?|versus|compared to|against)\s+", re.I)
+
+
+def _compare_ranges(question, now_dt):
+    """For an explicit 'X vs Y' period comparison, compute BOTH ranges
+    deterministically instead of leaving the second one for the model to
+    work out itself -- a small model doesn't reliably compute "the period
+    immediately before this one" (e.g. it has computed a whole month back
+    for "last week", instead of the 7 days before this week)."""
+    parts = _COMPARE_SPLIT_RE.split(question, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    first = extract_range(parts[0], now_dt)
+    second = extract_range(parts[1], now_dt)
+    if first and second:
+        return first, second
+    return None
+
+
 def _user_prompt(question, history, problem):
     from .config import LLM_BACKEND
     compact = LLM_BACKEND == "axelera"   # tight 1024-ctx build — keep it lean
 
     parts = [f"Question: {question}"]
-    rng = extract_range(question, now())
-    inherited = False
-    if not rng:
-        rng = _inherited_range(question, history, now())
-        inherited = rng is not None
-    if rng:
-        tag = " (carried over from the previous question — the follow-up names no period of its own)" if inherited else ""
-        parts.append(f"Interpreted date range: {label(rng)}{tag}")
+    cmp_ranges = _compare_ranges(question, now())
+    if cmp_ranges:
+        first, second = cmp_ranges
+        parts.append(f"Interpreted date ranges for this comparison — first = {label(first)}; "
+                     f"second = {label(second)}. Use each verbatim in its own subquery/branch; "
+                     "do not compute either one yourself.")
+    else:
+        rng = extract_range(question, now())
+        inherited = False
+        if not rng:
+            rng = _inherited_range(question, history, now())
+            inherited = rng is not None
+        if rng:
+            tag = " (carried over from the previous question — the follow-up names no period of its own)" if inherited else ""
+            parts.append(f"Interpreted date range: {label(rng)}{tag}")
     parts.append(f"Current date: {now().isoformat()}")
     pl = _product_link_block(question)
     if pl:
@@ -247,7 +284,7 @@ def _plan(question, history, stages):
                    "llama-cpp-python, or try again once it's warmed up.")
         raise QueryError(msg)
 
-    has_range = bool(extract_range(question, now()) or _inherited_range(question, history, now()))
+    has_range = bool(_compare_ranges(question, now()) or extract_range(question, now()) or _inherited_range(question, history, now()))
     problem = None
     for attempt in range(2):
         try:
@@ -313,7 +350,7 @@ def _resolve(question, history):
     _stage(stages, "Database execution", "Ran the query against the SQLite database.", t0)
 
     # self-correction: one regeneration if it errored or failed a check
-    has_range = bool(extract_range(question, now()) or _inherited_range(question, history, now()))
+    has_range = bool(_compare_ranges(question, now()) or extract_range(question, now()) or _inherited_range(question, history, now()))
     for attempt in range(2):
         problem = None
         if exec_err:
