@@ -276,6 +276,36 @@ def wrong_category_source(question: str, sql: str):
             "products (p.product_id = ti.product_id), then group by p.category.")
 
 
+_RESERVED_ALIAS_WORDS = {
+    "where", "group", "order", "limit", "having", "join", "on", "and", "or",
+    "as", "select", "from", "union", "all", "left", "right", "inner", "outer",
+}
+
+
+def fix_undefined_alias(sql: str) -> str:
+    """A single-table query sometimes prefixes SELECT/WHERE columns with a
+    table alias (`p.name`) while never actually aliasing the table in FROM
+    (`FROM products`, not `FROM products p`) -- SQLite then errors with
+    "no such column: p.name" even though the query is otherwise fine. If
+    there's no JOIN and every alias-looking prefix in the query agrees on one
+    undefined alias, add it to the FROM clause rather than let an easily
+    fixed query error out."""
+    if re.search(r"\bJOIN\b", sql, re.I):
+        return sql
+    m = re.search(r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+                  r"(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)\b)?", sql, re.I)
+    if not m:
+        return sql
+    table, alias = m.group(1), m.group(2)
+    if alias and alias.lower() not in _RESERVED_ALIAS_WORDS:
+        return sql  # already properly aliased
+    refs = {a for a in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]{0,3})\.[A-Za-z_]", sql)
+            if a.lower() not in _RESERVED_ALIAS_WORDS and a.lower() != table.lower()}
+    if len(refs) != 1:
+        return sql
+    return sql[:m.end(1)] + f" {next(iter(refs))}" + sql[m.end(1):]
+
+
 def wrong_time_grouping(question: str, sql: str):
     """'time of day' wants an hour grouping; 'day of week' wants weekday."""
     q = question.lower()

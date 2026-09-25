@@ -161,6 +161,22 @@ def test_needs_aggregation_flags_bare_filter():
                                  "SELECT COUNT(*) FROM transactions")
 
 
+def test_fix_undefined_alias_repairs_single_table_query():
+    from retail_llm.repair import fix_undefined_alias
+    bad = "SELECT p.name, p.price, p.current_stock FROM products WHERE product_id = 30"
+    fixed = fix_undefined_alias(bad)
+    assert "FROM products p" in fixed
+    rows = run_readonly(fixed)
+    assert isinstance(rows, list)
+    # already-correct SQL is left untouched
+    good = "SELECT name, price FROM products WHERE product_id = 30"
+    assert fix_undefined_alias(good) == good
+    # a JOIN query is left alone -- too ambiguous which table needs the alias
+    joined = ("SELECT p.name FROM products p JOIN transaction_items ti "
+              "ON ti.product_id = p.product_id")
+    assert fix_undefined_alias(joined) == joined
+
+
 def test_ambiguous_bill_sql_gets_transaction_id_filter():
     from retail_llm.repair import ambiguous_single_bill_request, fix_ambiguous_bill_sql
     bad_sql = ("SELECT t.transaction_id AS bill_no, p.name AS item FROM transactions t "
