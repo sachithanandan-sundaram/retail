@@ -161,6 +161,25 @@ def test_needs_aggregation_flags_bare_filter():
                                  "SELECT COUNT(*) FROM transactions")
 
 
+def test_repair_product_id_literal_fixes_copied_example_id():
+    # regression: "Price of pro paneer 200g" -> the model copied product_id
+    # 214 straight out of schema_prompt.py's worked example instead of using
+    # the real id (30, "Select Paneer 200g") that link_products_in_question
+    # actually resolved for this question.
+    from retail_llm.tools import repair_product_id_literal
+    bad = "SELECT name, price, current_stock FROM products WHERE product_id = 214\nLIMIT 500"
+    fixed, note = repair_product_id_literal(bad, "Price of pro paneer 200g")
+    assert "product_id = 30" in fixed and note
+    rows = run_readonly(fixed)
+    assert rows and "Paneer" in rows[0]["name"]
+    # a JOIN query is left alone -- product_id there might not even mean "the
+    # product this question names" (e.g. a correlated subquery over a
+    # different table's rows)
+    joined = ("SELECT p.name FROM products p JOIN transaction_items ti "
+              "ON ti.product_id = p.product_id WHERE p.product_id = 214")
+    assert repair_product_id_literal(joined, "Price of pro paneer 200g") == (joined, None)
+
+
 def test_fix_undefined_alias_repairs_single_table_query():
     from retail_llm.repair import fix_undefined_alias
     bad = "SELECT p.name, p.price, p.current_stock FROM products WHERE product_id = 30"

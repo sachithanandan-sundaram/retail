@@ -144,6 +144,39 @@ def repair_product_literals(sql: str):
     return _ensure_product_name(fixed), ("; ".join(notes) if notes else None)
 
 
+_PRODUCT_ID_LITERAL_RE = re.compile(
+    r"\b(?:\w+\.)?product_id\s*(=|IN)\s*\(?\s*(\d+(?:\s*,\s*\d+)*)(?:\s*\))?", re.I)
+
+
+def repair_product_id_literal(sql: str, question: str):
+    """Deterministic safety net: link_products_in_question may have resolved
+    the product the question names, but the model sometimes ignores that and
+    copies a literal product_id from a worked example in the prompt instead
+    of the real one it was given. If the SQL's product_id doesn't match what
+    was actually resolved, swap it in. Scoped to simple, single-table lookups
+    (no JOIN) -- a multi-table query might use product_id for something else
+    entirely, and blindly rewriting the first match found would be unsafe.
+    Returns (sql, note-or-None)."""
+    if re.search(r"\bJOIN\b", sql, re.I):
+        return sql, None
+    matches = link_products_in_question(question)
+    if not matches:
+        return sql, None
+    correct_ids = sorted({m["product_id"] for m in matches})
+    m = _PRODUCT_ID_LITERAL_RE.search(sql)
+    if not m:
+        return sql, None
+    used_ids = sorted({int(x) for x in re.findall(r"\d+", m.group(2))})
+    if used_ids == correct_ids:
+        return sql, None
+    if len(correct_ids) > 1:
+        replacement = f"product_id IN ({', '.join(str(i) for i in correct_ids)})"
+    else:
+        replacement = f"product_id = {correct_ids[0]}"
+    fixed = sql[:m.start()] + replacement + sql[m.end():]
+    return fixed, f"product_id {used_ids} -> {correct_ids}"
+
+
 def _ensure_product_name(sql: str) -> str:
     """A non-aggregate `SELECT price ... FROM products WHERE product_id IN (...)`
     over several products is unreadable without the name — add it so the answer
