@@ -419,7 +419,7 @@ def answer(question: str, history: list | None = None) -> dict:
     if _use_deterministic_phrasing(plan, rows, question):
         ans = _phrase.rows_to_sentence(rows, question)
         _stage(stages, "Answer generation",
-               "Phrased directly from the trusted result rows — no model call needed.", t0)
+               "Phrased directly from the result rows in code — no model call needed.", t0)
     else:
         raw = ""
         try:
@@ -459,7 +459,7 @@ def answer_stream(question: str, history: list | None = None):
     if _use_deterministic_phrasing(plan, rows, question):
         ans = _phrase.rows_to_sentence(rows, question)
         _stage(stages, "Answer generation",
-               "Phrased directly from the trusted result rows — no model call needed.", t0)
+               "Phrased directly from the result rows in code — no model call needed.", t0)
         yield "token", {"text": ans}
         yield "done", {"answer": ans, "stages": stages}
         return
@@ -506,6 +506,15 @@ def _use_deterministic_phrasing(plan, rows, question) -> bool:
     if _phrase._YESNO_RE.match(question or "") or _phrase._HOWMANY_TYPES_RE.search(question or ""):
         return True
     if rows and len(rows) == 2 and any("period" in str(k).lower() for k in rows[0]):
+        return True
+    # A "top N" list (e.g. 10 rows) asks the model to enumerate more items
+    # than its ~220-token answer budget reliably fits in flowing prose -- it
+    # either truncates mid-list or contradicts its own instruction to name
+    # just the top few. The table is shown in full separately regardless, so
+    # a longer result is always safer phrased deterministically.
+    from .config import LLM_BACKEND
+    cap = 6 if LLM_BACKEND == "axelera" else 8
+    if rows and len(rows) > cap:
         return True
     return False
 

@@ -331,6 +331,19 @@ def test_unsupported_intent():
 
 
 @needs_llm
+def test_long_result_list_is_phrased_deterministically_never_truncated():
+    # regression: a "top 10" list asked the model to enumerate more items
+    # than its answer token budget reliably fits, and it truncated mid-list
+    # ("...and 3." with nothing after). Any result over the row cap must be
+    # phrased in code, not by the model, regardless of the question wording.
+    r = answer("Top 10 fastest-moving items this week")
+    assert r["row_count"] == 10
+    assert r["answer"].rstrip().endswith(".")  # ends with real punctuation
+    assert not re.search(r"\b\d+\.\s*$", r["answer"])  # never dangles on a bare "N."
+    assert "Top" in r["answer"] and "of 10" in r["answer"]
+
+
+@needs_llm
 def test_data_query_answer_has_stages_and_matches_db():
     r = answer("What was total revenue today?")
     assert r["intent"] == "data_query"
