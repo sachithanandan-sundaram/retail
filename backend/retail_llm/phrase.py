@@ -15,7 +15,7 @@ _STRONG_COUNT_TOKENS = {
     "footfall", "count", "unit", "units", "qty", "quantity", "visit", "visits",
     "second", "seconds", "sec", "secs", "stock", "threshold", "pct", "percent",
     "day", "days", "hour", "hours", "rank", "id", "bills", "no", "number",
-    "item", "items", "product", "products", "sku", "skus",
+    "item", "items", "product", "products", "sku", "skus", "sold",
 }
 _MONEY_TOKENS = {
     "revenue", "amount", "billed", "value", "subtotal", "spend", "spent",

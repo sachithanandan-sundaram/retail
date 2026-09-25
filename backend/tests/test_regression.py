@@ -185,6 +185,15 @@ def test_phrase_rejects_mixed_bill_numbers():
     assert "Bill #1 —" not in ans  # must not fabricate a single-bill narrative
 
 
+def test_units_sold_not_formatted_as_money():
+    # regression: "total_sold" (a unit count) was rendered "Rs 51" because
+    # "total" alone maps to money and nothing overrode it for a *_sold column.
+    from retail_llm.phrase import _is_money_key
+    assert not _is_money_key("total_sold")
+    assert not _is_money_key("units_sold")
+    assert _is_money_key("total_amount")  # a real money field must stay money
+
+
 def test_diagnose_catches_category_on_wrong_table():
     from retail_llm.repair import wrong_category_source
     bad = "SELECT category, SUM(total_amount) FROM transactions GROUP BY category"
