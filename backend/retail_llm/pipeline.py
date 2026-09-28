@@ -22,7 +22,7 @@ from . import tools
 from .config import now
 from .db import run_readonly
 from .dates import extract_range, label
-from .repair import ValidationError, diagnose, fix_ambiguous_bill_sql, fix_explicit_bill_number, fix_missing_group_by, fix_undefined_alias, validate_sql
+from .repair import ValidationError, diagnose, fix_ambiguous_bill_sql, fix_explicit_bill_number, fix_missing_group_by, fix_referenced_bill_sql, fix_undefined_alias, validate_sql
 from .schema_prompt import answer_prompt, query_prompt
 
 
@@ -154,6 +154,30 @@ def _inherited_range(question, history, now_dt):
     return extract_range(prior_q, now_dt)
 
 
+_BILL_REF_RE = re.compile(
+    r"\b(that|this|the same|same)\s+(bill|invoice|receipt|transaction|order)\b", re.I)
+_BILL_NUM_IN_TEXT_RE = re.compile(
+    r"\b(?:bill|invoice|receipt|transaction|order)\s*(?:no\.?|number|#)?\s*(\d{3,})\b"
+    r"|#(\d{3,})\b", re.I)
+
+
+def _referenced_bill_number(question, history):
+    """A follow-up like 'give the list of items purchased in that bill' needs
+    the ACTUAL bill number from context, but the model reading raw history
+    text doesn't reliably find it (observed: it named a completely unrelated
+    product from a different bill entirely). Resolve it deterministically
+    from the most recent turn that named one, the same way a date range or
+    product is carried forward elsewhere in this file."""
+    if not history or not _BILL_REF_RE.search(question):
+        return None
+    for turn in reversed(history):
+        blob = " ".join(str(turn.get(k, "")) for k in ("question", "sql", "answer"))
+        m = _BILL_NUM_IN_TEXT_RE.search(blob)
+        if m:
+            return int(m.group(1) or m.group(2))
+    return None
+
+
 _COMPARE_SPLIT_RE = re.compile(r"\s+(?:vs\.?|versus|compared to|against)\s+", re.I)
 
 
@@ -226,6 +250,10 @@ def _user_prompt(question, history, problem):
             tag = " (carried over from the previous question — the follow-up names no period of its own)" if inherited else ""
             parts.append(f"Interpreted date range: {label(rng)}{tag}")
     parts.append(f"Current date: {now().isoformat()}")
+    ref_bill = _referenced_bill_number(question, history)
+    if ref_bill is not None:
+        parts.append(f"This follows up on bill #{ref_bill} mentioned earlier — filter "
+                     f"transaction_id = {ref_bill} for this question.")
     pl = _product_link_block(question)
     if pl:
         parts.append(pl)
@@ -330,6 +358,7 @@ def _plan(question, history, stages):
                 link_note = f'{link_note}; {id_note}' if link_note else id_note
             raw_sql = fix_ambiguous_bill_sql(question, raw_sql)
             raw_sql = fix_explicit_bill_number(question, raw_sql)
+            raw_sql = fix_referenced_bill_sql(raw_sql, _referenced_bill_number(question, history))
             raw_sql = fix_undefined_alias(raw_sql)
             raw_sql = fix_missing_group_by(raw_sql)
             raw_sql = fix_period_comparison_ranges(question, raw_sql)
@@ -409,6 +438,7 @@ def _resolve(question, history):
             new_sql, _ = tools.fix_types_count_query(question, new_sql)
             new_sql = fix_ambiguous_bill_sql(question, new_sql)
             new_sql = fix_explicit_bill_number(question, new_sql)
+            new_sql = fix_referenced_bill_sql(new_sql, _referenced_bill_number(question, history))
             new_sql = fix_undefined_alias(new_sql)
             new_sql = fix_missing_group_by(new_sql)
             new_sql = fix_period_comparison_ranges(question, new_sql)
@@ -554,6 +584,12 @@ def _use_deterministic_phrasing(plan, rows, question) -> bool:
     if _phrase._YESNO_RE.match(question or "") or _phrase._HOWMANY_TYPES_RE.search(question or ""):
         return True
     if rows and len(rows) == 2 and any("period" in str(k).lower() for k in rows[0]):
+        return True
+    # a bill's line items (header columns repeated per row) -- the model has
+    # dropped items when summarising this in prose (e.g. describing only 1 of
+    # 3 real line items as if it were the whole bill); the deterministic
+    # bill-narrator format in phrase.rows_to_sentence lists every item.
+    if rows and "bill_no" in rows[0] and "item" in rows[0]:
         return True
     # A "top N" list (e.g. 10 rows) asks the model to enumerate more items
     # than its ~220-token answer budget reliably fits in flowing prose -- it

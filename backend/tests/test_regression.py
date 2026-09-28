@@ -137,6 +137,37 @@ def test_bill_lookup_returns_all_line_items():
     assert len(rows) == n_items and n_items > 0
 
 
+@needs_llm
+def test_bill_detail_never_drops_items_in_prose():
+    # regression: the model's free-form phrasing described only 1 of 3 real
+    # line items as if it were the whole bill. A bill's line items are now
+    # always phrased deterministically (phrase.rows_to_sentence's dedicated
+    # bill-narrator format), which lists every one.
+    r = answer("show me the bill 1000")
+    n_items = _one("SELECT COUNT(*) c FROM transaction_items WHERE transaction_id=1000")["c"]
+    assert r["row_count"] == n_items
+    names = {row["item"] for row in r["result"]}
+    for name in names:
+        assert name in r["answer"]
+
+
+@needs_llm
+def test_referenced_bill_follow_up_resolves_to_same_bill():
+    # regression: "give the list of items purchased in that bill" right
+    # after "show me the bill 1000" returned a totally unrelated product
+    # from a different bill -- the model reading raw history text didn't
+    # reliably find which bill "that" referred to.
+    history = []
+    r1 = answer("show me the bill 1000")
+    history.append({"question": "show me the bill 1000", "sql": r1["sql"], "answer": r1["answer"]})
+    r2 = answer("give the list of items purchased in that bill", history)
+    real_names = {row["name"] for row in run_readonly(
+        "SELECT p.name FROM transaction_items ti JOIN products p ON p.product_id = ti.product_id "
+        "WHERE ti.transaction_id = 1000")}
+    got_names = {row.get("item") or row.get("name") for row in r2["result"]}
+    assert got_names and got_names <= real_names
+
+
 # --------------------------------------------------------------------------
 # repair / validation layer (deterministic, no LLM needed)
 # --------------------------------------------------------------------------
@@ -258,6 +289,26 @@ def test_fix_undefined_alias_repairs_single_table_query():
     joined = ("SELECT p.name FROM products p JOIN transaction_items ti "
               "ON ti.product_id = p.product_id")
     assert fix_undefined_alias(joined) == joined
+
+
+def test_referenced_bill_number_resolves_from_history():
+    from retail_llm.pipeline import _referenced_bill_number
+    history = [{"question": "show me the bill 1000",
+                "sql": "SELECT * FROM transactions WHERE transaction_id = 1000",
+                "answer": "Bill #1000 was rung up by..."}]
+    assert _referenced_bill_number("give the list of items purchased in that bill", history) == 1000
+    # no demonstrative reference -> nothing resolved, even with history present
+    assert _referenced_bill_number("what was total revenue today", history) is None
+    # demonstrative reference but no history -> nothing to resolve
+    assert _referenced_bill_number("what was in that bill", []) is None
+
+
+def test_fix_referenced_bill_sql_forces_correct_filter():
+    from retail_llm.repair import fix_referenced_bill_sql
+    wrong = "SELECT p.name FROM products p JOIN transaction_items ti ON ti.product_id = p.product_id WHERE ti.transaction_id = 9999"
+    fixed = fix_referenced_bill_sql(wrong, 1000)
+    assert "transaction_id = 1000" in fixed and "9999" not in fixed
+    assert fix_referenced_bill_sql(wrong, None) == wrong
 
 
 def test_fix_explicit_bill_number_corrects_wrong_filters():

@@ -240,6 +240,24 @@ _BILL_NUMBER_EXTRACT_RE = re.compile(
     re.I)
 
 
+def _force_transaction_id(sql: str, num) -> str:
+    """Rewrite sql's WHERE clause to filter exactly transaction_id = num,
+    discarding whatever filter (or lack of one) the model wrote instead."""
+    tbl_m = re.search(r"\bFROM\s+transactions\s+(?:AS\s+)?(\w+)\b", sql, re.I)
+    alias = tbl_m.group(1) if tbl_m and tbl_m.group(1).lower() not in _RESERVED_ALIAS_WORDS \
+        else "transactions"
+    if re.search(rf"\btransaction_id\s*=\s*{num}\b", _where_clause(sql)):
+        return sql  # already correct
+    filt = f"{alias}.transaction_id = {num}"
+    if re.search(r"\bWHERE\b", sql, re.I):
+        return re.sub(r"\bWHERE\b.*?(?=\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
+                      f"WHERE {filt} ", sql, count=1, flags=re.I | re.S)
+    m2 = re.search(r"\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.I)
+    if m2:
+        return sql[:m2.start()] + f"WHERE {filt} " + sql[m2.start():]
+    return sql + f" WHERE {filt}"
+
+
 def fix_explicit_bill_number(question: str, sql: str) -> str:
     """The mirror case of ambiguous_single_bill_request: the question DOES
     name a specific bill number, but the model doesn't reliably use it --
@@ -252,21 +270,18 @@ def fix_explicit_bill_number(question: str, sql: str) -> str:
     m = _BILL_NUMBER_EXTRACT_RE.search(question)
     if not m:
         return sql
-    num = m.group(1) or m.group(2)
-    tbl_m = re.search(r"\bFROM\s+transactions\s+(?:AS\s+)?(\w+)\b", sql, re.I)
-    alias = tbl_m.group(1) if tbl_m and tbl_m.group(1).lower() not in _RESERVED_ALIAS_WORDS \
-        else "transactions"
-    if _where_clause(sql).strip() == f"{alias}.transaction_id = {num}" or \
-       re.search(rf"\btransaction_id\s*=\s*{num}\b", _where_clause(sql)):
-        return sql  # already correct
-    filt = f"{alias}.transaction_id = {num}"
-    if re.search(r"\bWHERE\b", sql, re.I):
-        return re.sub(r"\bWHERE\b.*?(?=\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
-                      f"WHERE {filt} ", sql, count=1, flags=re.I | re.S)
-    m2 = re.search(r"\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.I)
-    if m2:
-        return sql[:m2.start()] + f"WHERE {filt} " + sql[m2.start():]
-    return sql + f" WHERE {filt}"
+    return _force_transaction_id(sql, m.group(1) or m.group(2))
+
+
+def fix_referenced_bill_sql(sql: str, num) -> str:
+    """A follow-up naming no number itself ('that bill') but resolved to one
+    via conversation history (pipeline._referenced_bill_number) -- force the
+    same exact-match filter. num is None when the question isn't this shape
+    or nothing could be resolved from history, in which case sql is
+    returned untouched."""
+    if num is None:
+        return sql
+    return _force_transaction_id(sql, num)
 
 
 def fix_ambiguous_bill_sql(question: str, sql: str) -> str:
