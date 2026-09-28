@@ -98,8 +98,8 @@ const SUGGESTIONS = [
   "Total revenue this week vs last week",
   "Which counter person has billed the most this week?",
   "Price of pro paneer 200g",
-  "Show me what was in bill #15000",
-  "Top 10 fastest-moving items this week",
+  "Show me the last bill",
+  "Give me a monthly sales report",
 ];
 
 export default function ChatWidget({ onAnswered }) {
