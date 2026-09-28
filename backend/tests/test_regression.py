@@ -180,6 +180,37 @@ def test_repair_product_id_literal_fixes_copied_example_id():
     assert repair_product_id_literal(joined, "Price of pro paneer 200g") == (joined, None)
 
 
+def test_fix_types_count_query_resolves_correctly():
+    # regression: "how many types of paneer" returned 279 (the whole
+    # catalogue -- the model's SQL had no WHERE filter at all), and "how many
+    # types of tea powder" returned an unrelated count. This has a
+    # mechanically well-defined correct answer, so it's resolved
+    # deterministically rather than trusted to the model.
+    from retail_llm.tools import fix_types_count_query
+    sql, note = fix_types_count_query(
+        "How many types of paneer we have?",
+        "SELECT COUNT(DISTINCT name) AS n FROM products")
+    assert note and "paneer" in note
+    rows = run_readonly(sql)
+    assert len(rows) == 1 and rows[0]["name"] == "Select Paneer 200g"
+
+    # a category-style term resolves to the real category, not a fuzzy
+    # product-name substring match
+    sql2, note2 = fix_types_count_query("How many types of beverages do we have?", "SELECT 1")
+    assert "category = 'Beverages'" in sql2
+    rows2 = run_readonly(sql2)
+    assert len(rows2) > 1
+
+    # a term with no real catalogue match honestly returns nothing instead of
+    # a fabricated count (the old failure mode for "tea powder")
+    sql3, note3 = fix_types_count_query("How many types of tea powder we have?", "SELECT 1")
+    assert run_readonly(sql3) == []
+
+    # a question that isn't this shape is left untouched
+    sql4, note4 = fix_types_count_query("what was total revenue today", "SELECT 1")
+    assert sql4 == "SELECT 1" and note4 is None
+
+
 def test_fix_undefined_alias_repairs_single_table_query():
     from retail_llm.repair import fix_undefined_alias
     bad = "SELECT p.name, p.price, p.current_stock FROM products WHERE product_id = 30"

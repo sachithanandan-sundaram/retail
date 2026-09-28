@@ -67,6 +67,68 @@ def resolve_product_names(term: str, limit: int = 12):
     return hits[:limit]
 
 
+def _strict_resolve(term: str, limit: int = 200):
+    """Like resolve_product_names but WITHOUT the loose "any single
+    significant token" / "whole-string fuzzy" fallback tiers. Those exist to
+    rescue a specific, typo'd single-product lookup ("pro panner 200g"), but
+    for a category-ish multi-word term with no real match in the catalogue
+    ("tea powder") they instead grab every product containing just one of the
+    words (every "...Powder" product) or fuzzy-match a short word onto an
+    unrelated name. Used where a confident wrong answer is worse than
+    honestly finding nothing."""
+    raw = _tokens(term)
+    if not raw:
+        return []
+    names = [r["name"] for r in run_readonly("SELECT name FROM products")]
+    low = {n: n.lower() for n in names}
+    vocab = {w for n in names for w in re.findall(r"[a-z0-9]+", low[n])}
+    toks = []
+    for t in raw:
+        if t in vocab or any(t in w for w in vocab):
+            toks.append(t)
+        else:
+            near = difflib.get_close_matches(t, list(vocab), n=1, cutoff=0.8)
+            toks.append(near[0] if near else t)
+    hits = [n for n in names if all(t in low[n] for t in toks)]
+    return hits[:limit]
+
+
+_TYPES_OF_EXTRACT_RE = re.compile(
+    r"how many\s+(?:types?|kinds?|variants?|varieties|different|distinct|unique|options?)\s+of\s+"
+    r"(.+?)(?:\s+(?:do|does|are|we|you|there|available)\b.*)?[\?.!]*$", re.I)
+
+
+def fix_types_count_query(question: str, sql: str):
+    """'how many types/kinds of X do we have' has a mechanically well-defined
+    correct answer, but the model has proven very unreliable at writing it:
+    observed failures include dropping the WHERE filter entirely (counting
+    the whole catalogue), using a category literal that doesn't exist, and
+    ANDing an unrelated product_id list with a category filter. Resolve X
+    against the catalogue ourselves and replace the SQL outright rather than
+    trust whatever the model wrote. Returns (sql, note-or-None); returns the
+    original sql unchanged when the question isn't this shape."""
+    m = _TYPES_OF_EXTRACT_RE.search(question.strip())
+    if not m:
+        return sql, None
+    term = m.group(1).strip(" ?.")
+    if not term:
+        return sql, None
+    from .repair import CATEGORIES, CATEGORY_KEYWORDS
+    tl = term.lower()
+    cat = next((c for c in CATEGORIES if c.lower() == tl or tl in c.lower()), None)
+    if not cat:
+        cat = next((c for kw, c in CATEGORY_KEYWORDS.items() if kw in tl), None)
+    if cat:
+        new_sql = f"SELECT name, category FROM products WHERE category = '{cat}' ORDER BY name LIMIT 200"
+        return new_sql, f'resolved "{term}" to the category \'{cat}\''
+    names = _strict_resolve(term)
+    if not names:
+        return "SELECT name FROM products WHERE 1 = 0", f'no catalogue match for "{term}"'
+    quoted = ", ".join("'" + n.replace("'", "''") + "'" for n in names)
+    new_sql = f"SELECT name, category FROM products WHERE name IN ({quoted}) ORDER BY name"
+    return new_sql, f'resolved "{term}" to {len(names)} catalogue product(s)'
+
+
 def find_product(query: str, limit: int = 12):
     """Tool body. Returns catalogue rows for the products matching `query`."""
     names = resolve_product_names(query, limit)

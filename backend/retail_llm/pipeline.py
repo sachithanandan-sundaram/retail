@@ -291,6 +291,9 @@ def _plan(question, history, stages):
             raw_sql = _gen_sql(question, history, problem, is_retry=(attempt == 1), stages=stages)
             raw_sql, link_note = tools.repair_product_literals(raw_sql)
             raw_sql, id_note = tools.repair_product_id_literal(raw_sql, question)
+            raw_sql, types_note = tools.fix_types_count_query(question, raw_sql)
+            if types_note:
+                id_note = types_note
             if id_note:
                 link_note = f'{link_note}; {id_note}' if link_note else id_note
             raw_sql = fix_ambiguous_bill_sql(question, raw_sql)
@@ -368,6 +371,7 @@ def _resolve(question, history):
             new_sql = _gen_sql(question, history, problem, is_retry=True, stages=stages)
             new_sql, _ = tools.repair_product_literals(new_sql)
             new_sql, _ = tools.repair_product_id_literal(new_sql, question)
+            new_sql, _ = tools.fix_types_count_query(question, new_sql)
             new_sql = fix_ambiguous_bill_sql(question, new_sql)
             new_sql = fix_undefined_alias(new_sql)
             new_sql = validate_sql(new_sql)
