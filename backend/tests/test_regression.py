@@ -303,6 +303,23 @@ def test_referenced_bill_number_resolves_from_history():
     assert _referenced_bill_number("what was in that bill", []) is None
 
 
+def test_force_transaction_id_strips_too_small_limit():
+    # regression: the model wrote "... WHERE transaction_id = 1000 ORDER BY
+    # ti.line_total DESC LIMIT 1" -- correctly filtered to the right bill,
+    # but LIMIT 1 truncated a 3-item bill down to showing just its priciest
+    # line, described in prose as if that were the whole bill.
+    from retail_llm.repair import fix_explicit_bill_number
+    bad = ("SELECT t.transaction_id AS bill_no, p.name AS item FROM transactions t "
+           "JOIN transaction_items ti ON ti.transaction_id = t.transaction_id "
+           "JOIN products p ON p.product_id = ti.product_id "
+           "ORDER BY ti.line_total DESC LIMIT 1")
+    fixed = fix_explicit_bill_number("show me the bill 1000", bad)
+    assert not re.search(r"\bLIMIT\s+1\b", fixed, re.I)
+    rows = run_readonly(fixed)
+    n_items = _one("SELECT COUNT(*) c FROM transaction_items WHERE transaction_id=1000")["c"]
+    assert len(rows) == n_items
+
+
 def test_fix_referenced_bill_sql_forces_correct_filter():
     from retail_llm.repair import fix_referenced_bill_sql
     wrong = "SELECT p.name FROM products p JOIN transaction_items ti ON ti.product_id = p.product_id WHERE ti.transaction_id = 9999"

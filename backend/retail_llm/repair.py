@@ -240,22 +240,32 @@ _BILL_NUMBER_EXTRACT_RE = re.compile(
     re.I)
 
 
+_SMALL_LIMIT_RE = re.compile(r"\bLIMIT\s+(\d+)\s*$", re.I)
+
+
 def _force_transaction_id(sql: str, num) -> str:
     """Rewrite sql's WHERE clause to filter exactly transaction_id = num,
-    discarding whatever filter (or lack of one) the model wrote instead."""
+    discarding whatever filter (or lack of one) the model wrote instead. Also
+    strips a too-small trailing LIMIT (e.g. LIMIT 1) -- a single bill's own
+    line items should never be artificially truncated; validate_sql adds a
+    generous default cap back if none is left."""
     tbl_m = re.search(r"\bFROM\s+transactions\s+(?:AS\s+)?(\w+)\b", sql, re.I)
     alias = tbl_m.group(1) if tbl_m and tbl_m.group(1).lower() not in _RESERVED_ALIAS_WORDS \
         else "transactions"
-    if re.search(rf"\btransaction_id\s*=\s*{num}\b", _where_clause(sql)):
-        return sql  # already correct
-    filt = f"{alias}.transaction_id = {num}"
-    if re.search(r"\bWHERE\b", sql, re.I):
-        return re.sub(r"\bWHERE\b.*?(?=\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
-                      f"WHERE {filt} ", sql, count=1, flags=re.I | re.S)
-    m2 = re.search(r"\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.I)
-    if m2:
-        return sql[:m2.start()] + f"WHERE {filt} " + sql[m2.start():]
-    return sql + f" WHERE {filt}"
+    already_correct = re.search(rf"\btransaction_id\s*=\s*{num}\b", _where_clause(sql))
+    if not already_correct:
+        filt = f"{alias}.transaction_id = {num}"
+        if re.search(r"\bWHERE\b", sql, re.I):
+            sql = re.sub(r"\bWHERE\b.*?(?=\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
+                         f"WHERE {filt} ", sql, count=1, flags=re.I | re.S)
+        else:
+            m2 = re.search(r"\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.I)
+            sql = (sql[:m2.start()] + f"WHERE {filt} " + sql[m2.start():]) if m2 \
+                else sql + f" WHERE {filt}"
+    m3 = _SMALL_LIMIT_RE.search(sql)
+    if m3 and int(m3.group(1)) < 50:
+        sql = sql[:m3.start()].rstrip()
+    return sql
 
 
 def fix_explicit_bill_number(question: str, sql: str) -> str:
