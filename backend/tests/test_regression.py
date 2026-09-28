@@ -488,6 +488,30 @@ def test_extract_json_recovers_from_stray_trailing_characters():
     assert "last_week" in obj["sql"]
 
 
+def test_fix_period_comparison_ranges_corrects_swapped_dates():
+    # regression: "revenue is Rs 30,32,169, up 59218% from Rs 5,112" -- the
+    # model swapped which computed date range got attached to which period
+    # label, so a single day's revenue was reported as a full week's and
+    # vice versa. The fix overwrites both date ranges by POSITION (not by
+    # label), which corrects a swap regardless of which label ended up
+    # attached to which range.
+    from retail_llm.pipeline import fix_period_comparison_ranges
+    from retail_llm.config import now
+    swapped = ("SELECT 'this week' AS period, ROUND(SUM(total_amount),2) AS revenue "
+               "FROM transactions WHERE ts >= '2020-01-01T00:00:00' AND ts < '2020-02-01T00:00:00' "
+               "UNION ALL SELECT 'last week', ROUND(SUM(total_amount),2) FROM transactions "
+               "WHERE ts >= '2020-03-01T00:00:00' AND ts < '2020-03-08T00:00:00'")
+    fixed = fix_period_comparison_ranges("Total revenue this week vs last week", swapped)
+    from retail_llm.pipeline import _compare_ranges
+    (a1, b1), (a2, b2) = _compare_ranges("Total revenue this week vs last week", now())
+    assert a1.isoformat() in fixed and b1.isoformat() in fixed
+    assert a2.isoformat() in fixed and b2.isoformat() in fixed
+    assert "2020-01-01" not in fixed and "2020-03-01" not in fixed
+    # a non-comparison question's SQL is left untouched
+    plain = "SELECT ROUND(SUM(total_amount),2) FROM transactions WHERE ts >= '2020-01-01T00:00:00' AND ts < '2020-02-01T00:00:00'"
+    assert fix_period_comparison_ranges("what was total revenue today", plain) == plain
+
+
 def test_compare_ranges_computes_both_periods_independently():
     from retail_llm.pipeline import _compare_ranges
     from retail_llm.config import now

@@ -173,6 +173,36 @@ def _compare_ranges(question, now_dt):
     return None
 
 
+_DATE_RANGE_PAIR_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_.]*)\s*>=\s*'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'\s*"
+    r"AND\s+\1\s*<\s*'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'", re.I)
+
+
+def fix_period_comparison_ranges(question, sql):
+    """A two-period comparison gets both exact date ranges injected into the
+    prompt (see _compare_ranges), but the model doesn't reliably attach them
+    to the right branch -- observed failures include computing "last week"
+    as a full month back, and swapping which range goes with which label so
+    a single day's revenue gets reported as a full week's. Since both ranges
+    are already known exactly, overwrite whichever two date-range WHERE
+    clauses appear in the SQL, in order, with the correct boundaries --
+    positional, not label-matched, which is exactly what's needed to correct
+    a swap regardless of which label ended up attached to which range."""
+    cmp_ranges = _compare_ranges(question, now())
+    if not cmp_ranges:
+        return sql
+    matches = list(_DATE_RANGE_PAIR_RE.finditer(sql))
+    if len(matches) != 2:
+        return sql
+    out = sql
+    for m, rng in zip(reversed(matches), reversed(cmp_ranges)):
+        col = m.group(1)
+        a, b = rng
+        replacement = f"{col} >= '{a.isoformat()}' AND {col} < '{b.isoformat()}'"
+        out = out[:m.start()] + replacement + out[m.end():]
+    return out
+
+
 def _user_prompt(question, history, problem):
     from .config import LLM_BACKEND
     compact = LLM_BACKEND == "axelera"   # tight 1024-ctx build — keep it lean
@@ -182,8 +212,10 @@ def _user_prompt(question, history, problem):
     if cmp_ranges:
         first, second = cmp_ranges
         parts.append(f"Interpreted date ranges for this comparison — first = {label(first)}; "
-                     f"second = {label(second)}. Use each verbatim in its own subquery/branch; "
-                     "do not compute either one yourself.")
+                     f"second = {label(second)}. Use each verbatim in its own subquery/branch "
+                     "(label each branch to match the wording in the question itself, e.g. "
+                     "'this week'/'last week' — never the literal words 'first'/'second'); "
+                     "do not compute either range yourself.")
     else:
         rng = extract_range(question, now())
         inherited = False
@@ -299,6 +331,7 @@ def _plan(question, history, stages):
             raw_sql = fix_ambiguous_bill_sql(question, raw_sql)
             raw_sql = fix_undefined_alias(raw_sql)
             raw_sql = fix_missing_group_by(raw_sql)
+            raw_sql = fix_period_comparison_ranges(question, raw_sql)
             sql = validate_sql(raw_sql)
         except (QueryError, ValidationError) as e:
             problem = f"the query was invalid ({e})"
@@ -376,6 +409,7 @@ def _resolve(question, history):
             new_sql = fix_ambiguous_bill_sql(question, new_sql)
             new_sql = fix_undefined_alias(new_sql)
             new_sql = fix_missing_group_by(new_sql)
+            new_sql = fix_period_comparison_ranges(question, new_sql)
             new_sql = validate_sql(new_sql)
             new_rows = run_readonly(new_sql, ())
         except Exception:
