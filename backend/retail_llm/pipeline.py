@@ -22,7 +22,7 @@ from . import tools
 from .config import now
 from .db import run_readonly
 from .dates import extract_range, label
-from .repair import ValidationError, diagnose, fix_ambiguous_bill_sql, fix_explicit_bill_number, fix_missing_group_by, fix_referenced_bill_sql, fix_undefined_alias, validate_sql
+from .repair import ValidationError, diagnose, fix_ambiguous_bill_sql, fix_explicit_bill_number, fix_missing_group_by, fix_referenced_bill_sql, fix_undefined_alias, fix_visit_column, validate_sql
 from .schema_prompt import answer_prompt, query_prompt
 
 
@@ -134,6 +134,19 @@ def _product_link_block(question) -> str:
     for r in matches:
         lines.append(f"  product_id {r['product_id']}: \"{r['name']}\" | {r['category']} "
                      f"| price {r['price']} | stock {r['current_stock']}")
+    return "\n".join(lines)
+
+
+def _customer_link_block(question) -> str:
+    matches = tools.link_customers_in_question(question)
+    if not matches:
+        return ""
+    lines = ["\nCustomer(s) the question names (filter by customer_id — these are exact). "
+             "The name is not unique in this data; if more than one customer_id is listed, "
+             "the question's name is shared by several different customers — include ALL of "
+             "them in the query (e.g. customer_id IN (...)) rather than picking just one:"]
+    for r in matches:
+        lines.append(f"  customer_id {r['customer_id']}: \"{r['name']}\"")
     return "\n".join(lines)
 
 
@@ -257,6 +270,9 @@ def _user_prompt(question, history, problem):
     pl = _product_link_block(question)
     if pl:
         parts.append(pl)
+    cl = _customer_link_block(question)
+    if cl:
+        parts.append(cl)
     # History text degrades the tight-context Metis builds (guide §4); the
     # deterministic layers (bill-ref resolver, product linker, classify)
     # already carry follow-ups. Only include it on the roomy dev backend.
@@ -361,6 +377,7 @@ def _plan(question, history, stages):
             raw_sql = fix_referenced_bill_sql(raw_sql, _referenced_bill_number(question, history))
             raw_sql = fix_undefined_alias(raw_sql)
             raw_sql = fix_missing_group_by(raw_sql)
+            raw_sql = fix_visit_column(question, raw_sql)
             raw_sql = fix_period_comparison_ranges(question, raw_sql)
             sql = validate_sql(raw_sql)
         except (QueryError, ValidationError) as e:
@@ -441,6 +458,7 @@ def _resolve(question, history):
             new_sql = fix_referenced_bill_sql(new_sql, _referenced_bill_number(question, history))
             new_sql = fix_undefined_alias(new_sql)
             new_sql = fix_missing_group_by(new_sql)
+            new_sql = fix_visit_column(question, new_sql)
             new_sql = fix_period_comparison_ranges(question, new_sql)
             new_sql = validate_sql(new_sql)
             new_rows = run_readonly(new_sql, ())
@@ -590,6 +608,12 @@ def _use_deterministic_phrasing(plan, rows, question) -> bool:
     # 3 real line items as if it were the whole bill); the deterministic
     # bill-narrator format in phrase.rows_to_sentence lists every item.
     if rows and "bill_no" in rows[0] and "item" in rows[0]:
+        return True
+    # several customer rows sharing one question (a name that isn't unique in
+    # this data, e.g. 4 different "Dev Nair" customers) -- the model has
+    # described only the FIRST one as if it answered the whole question,
+    # silently dropping the other genuinely different customers.
+    if rows and len(rows) > 1 and "customer_id" in rows[0]:
         return True
     # A "top N" list (e.g. 10 rows) asks the model to enumerate more items
     # than its ~220-token answer budget reliably fits in flowing prose -- it

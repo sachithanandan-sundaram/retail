@@ -389,6 +389,46 @@ def test_units_sold_not_formatted_as_money():
     assert _is_money_key("total_amount")  # a real money field must stay money
 
 
+def test_link_products_no_longer_misfires_on_generic_phrasing():
+    # regression: "What day of the week has peak sales?" got corrupted into
+    # a product query (product_id IN (...)) because the old fallback guard
+    # `\b(of|for)\s+[a-z]` matched "day OF THE week" and treated "week" as a
+    # product search term.
+    from retail_llm.tools import link_products_in_question
+    assert link_products_in_question("What day of the week has peak sales?") == []
+    assert link_products_in_question("revenue for the month") == []
+    # legitimate product-price phrasing must still work
+    assert link_products_in_question("price of pro paneer 200g") != []
+
+
+def test_customer_name_resolves_all_matches_when_ambiguous():
+    # regression: "Dev Nair" (4 different customers share this name) ->
+    # the model either found nothing, or confused the name for a product
+    # and polluted the query with unrelated product names.
+    from retail_llm.tools import link_customers_in_question, resolve_customer_names
+    matches = resolve_customer_names("dev nair")
+    assert len(matches) == 4
+    ids = {m["customer_id"] for m in matches}
+    assert ids == {200, 230, 734, 976}
+    linked = link_customers_in_question("show details about dev nair")
+    assert {m["customer_id"] for m in linked} == ids
+    # a question with an explicit numeric customer id skips name resolution
+    assert link_customers_in_question("show details about customer #1234") == []
+    # an unrelated question never triggers this
+    assert link_customers_in_question("what was total revenue today") == []
+
+
+def test_wrong_visit_column_detects_and_fixes():
+    from retail_llm.repair import fix_visit_column, wrong_visit_column
+    bad = "SELECT first_visit FROM customers WHERE customer_id = 200"
+    assert wrong_visit_column("when did dev nair last visit", bad)
+    fixed = fix_visit_column("when did dev nair last visit", bad)
+    assert "last_visit" in fixed and "first_visit" not in fixed
+    # a question about the FIRST visit is correctly left alone
+    assert not wrong_visit_column("when did dev nair first visit", bad)
+    assert fix_visit_column("when did dev nair first visit", bad) == bad
+
+
 def test_diagnose_catches_category_on_wrong_table():
     from retail_llm.repair import wrong_category_source
     bad = "SELECT category, SUM(total_amount) FROM transactions GROUP BY category"

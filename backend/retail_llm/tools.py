@@ -151,14 +151,75 @@ def link_products_in_question(question: str, limit: int = 6):
     Returns [] unless the match is confident (every significant question token
     appears in the product name)."""
     q = question.lower()
-    # only when the question is plausibly about a specific product/its price/stock
+    # only when the question is plausibly about a specific product/its price/stock.
+    # NOTE: a bare `\b(of|for)\s+[a-z]` fallback used to sit here to catch
+    # phrasings like "details of X" -- it was far too broad in practice (it
+    # matched "day OF THE week", "revenue FOR the month", ...) and would send
+    # an unrelated word into find_product's fuzzy matching, corrupting queries
+    # that have nothing to do with a product at all.
     if not re.search(r"\b(price|cost|mrp|rate|stock|inventory|how much|units? of|"
-                     r"in stock|reorder|do (?:i|we) (?:have|carry|stock))\b", q) \
-       and not re.search(r"\b(of|for)\s+[a-z]", q):
+                     r"in stock|reorder|do (?:i|we) (?:have|carry|stock))\b", q):
         return []
     res = find_product(question, limit)
     matches = res["matches"]
     # guard against a coincidental all-token hit on an unrelated question
+    if not matches or len(matches) > limit:
+        return []
+    return matches
+
+
+_CUSTOMER_STOPWORDS = {
+    "the", "a", "an", "of", "for", "is", "are", "was", "were", "be", "me", "please",
+    "customer", "customers", "show", "give", "tell", "details", "detail", "about",
+    "profile", "info", "information", "when", "did", "does", "do", "last", "visit",
+    "visited", "visits", "store", "shop", "spend", "spent", "everything", "history",
+    "what", "who", "name", "us", "our", "we", "and", "to",
+}
+
+
+def resolve_customer_names(term: str, limit: int = 12):
+    """Free-text term -> matching customer rows ({customer_id, name}), best
+    first. Mirrors resolve_product_names but adapted for simple 'First Last'
+    customer names -- and, unlike products, a name here is often genuinely
+    NOT unique (several customers can share the same name in this synthetic
+    dataset), so this deliberately returns every matching customer rather
+    than picking one."""
+    raw = [t for t in re.findall(r"[a-z]+", term.lower())
+           if len(t) > 1 and t not in _CUSTOMER_STOPWORDS]
+    if not raw:
+        return []
+    rows = run_readonly("SELECT customer_id, name FROM customers")
+    low = {r["customer_id"]: r["name"].lower() for r in rows}
+    vocab = {w for n in low.values() for w in n.split()}
+    toks = []
+    for t in raw:
+        if t in vocab:
+            toks.append(t)
+        else:
+            near = difflib.get_close_matches(t, list(vocab), n=1, cutoff=0.8)
+            toks.append(near[0] if near else t)
+    hits = [r for r in rows if all(t in low[r["customer_id"]] for t in toks)]
+    return hits[:limit]
+
+
+_CUSTOMER_HINT_RE = re.compile(
+    r"\bcustomer\b|\bvisited\b|\bvisit(s|ed)?\b|\bspend\b|\bspent\b|"
+    r"\bdetails?\s+(of|about)\b|\bprofile\b|\bhistory\b|\beverything about\b", re.I)
+_CUSTOMER_ID_GIVEN_RE = re.compile(r"customer\s*#?\s*\d+", re.I)
+
+
+def link_customers_in_question(question: str, limit: int = 8):
+    """Schema/value linking for customers, mirroring link_products_in_question:
+    if the question clearly names a specific customer BY NAME, resolve to
+    real rows so the prompt can hand the model exact customer_id(s) instead
+    of it guessing a name literal (or, observed in practice, mistaking the
+    name for a product and polluting the query with unrelated results from
+    find_product). Skipped when the question already gives a numeric
+    customer id -- that's unambiguous on its own."""
+    q = question.lower()
+    if not _CUSTOMER_HINT_RE.search(q) or _CUSTOMER_ID_GIVEN_RE.search(q):
+        return []
+    matches = resolve_customer_names(question, limit)
     if not matches or len(matches) > limit:
         return []
     return matches

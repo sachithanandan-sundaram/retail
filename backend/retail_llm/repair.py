@@ -456,6 +456,29 @@ def fix_missing_group_by(sql: str) -> str:
     return sql.rstrip().rstrip(";") + " " + group_by
 
 
+_LAST_VISIT_RE = re.compile(
+    r"\blast\s+visit(ed)?\b|\bvisited\b.{0,20}\blast\b|\blast\b.{0,20}\bvisit(ed)?\b|"
+    r"\bmost\s+recent(ly)?\s+visit", re.I)
+
+
+def wrong_visit_column(question: str, sql: str) -> bool:
+    """'when did X last visit' means customers.last_visit -- the model keeps
+    reaching for first_visit instead (observed consistently, not just
+    occasionally, so a prompt note alone wasn't enough)."""
+    if not _LAST_VISIT_RE.search(question):
+        return False
+    return bool(re.search(r"\bfirst_visit\b", sql, re.I)) and \
+        not re.search(r"\blast_visit\b", sql, re.I)
+
+
+def fix_visit_column(question: str, sql: str) -> str:
+    """Deterministic repair for wrong_visit_column: swap first_visit for
+    last_visit outright rather than hope a retry gets it right."""
+    if not wrong_visit_column(question, sql):
+        return sql
+    return re.sub(r"\bfirst_visit\b", "last_visit", sql, flags=re.I)
+
+
 def wrong_time_grouping(question: str, sql: str):
     """'time of day' wants an hour grouping; 'day of week' wants weekday."""
     q = question.lower()
@@ -489,6 +512,9 @@ def diagnose(question: str, sql: str, has_range: bool | None = None):
     wc = wrong_category_source(question, sql)
     if wc:
         return wc
+    if wrong_visit_column(question, sql):
+        return ("the question asks when the customer LAST visited — use customers.last_visit, "
+                "not first_visit (that's their very first visit, a different value entirely).")
     if missing_group_by(sql):
         return ("the SELECT mixes a plain column with an aggregate (SUM/COUNT/AVG/...) but has "
                 "no GROUP BY -- SQLite silently picks one arbitrary row's value for the plain "
