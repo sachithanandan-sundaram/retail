@@ -236,7 +236,7 @@ def build():
     tx_rows = []
     item_rows = []
     footfall_rows = []
-    tx_id = 0
+    tx_id = 999  # bill numbers are unique, sequential, and start at 1000
 
     for d in range(DAYS + 1):
         day = end.date() - timedelta(days=DAYS - d)
