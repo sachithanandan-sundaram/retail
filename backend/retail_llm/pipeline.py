@@ -22,7 +22,7 @@ from . import tools
 from .config import now
 from .db import run_readonly
 from .dates import extract_range, label
-from .repair import ValidationError, diagnose, fix_ambiguous_bill_sql, fix_missing_group_by, fix_undefined_alias, validate_sql
+from .repair import ValidationError, diagnose, fix_ambiguous_bill_sql, fix_explicit_bill_number, fix_missing_group_by, fix_undefined_alias, validate_sql
 from .schema_prompt import answer_prompt, query_prompt
 
 
@@ -329,6 +329,7 @@ def _plan(question, history, stages):
             if id_note:
                 link_note = f'{link_note}; {id_note}' if link_note else id_note
             raw_sql = fix_ambiguous_bill_sql(question, raw_sql)
+            raw_sql = fix_explicit_bill_number(question, raw_sql)
             raw_sql = fix_undefined_alias(raw_sql)
             raw_sql = fix_missing_group_by(raw_sql)
             raw_sql = fix_period_comparison_ranges(question, raw_sql)
@@ -407,6 +408,7 @@ def _resolve(question, history):
             new_sql, _ = tools.repair_product_id_literal(new_sql, question)
             new_sql, _ = tools.fix_types_count_query(question, new_sql)
             new_sql = fix_ambiguous_bill_sql(question, new_sql)
+            new_sql = fix_explicit_bill_number(question, new_sql)
             new_sql = fix_undefined_alias(new_sql)
             new_sql = fix_missing_group_by(new_sql)
             new_sql = fix_period_comparison_ranges(question, new_sql)

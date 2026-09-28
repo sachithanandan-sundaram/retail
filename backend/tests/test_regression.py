@@ -260,6 +260,34 @@ def test_fix_undefined_alias_repairs_single_table_query():
     assert fix_undefined_alias(joined) == joined
 
 
+def test_fix_explicit_bill_number_corrects_wrong_filters():
+    # regression: "show me tha bill 1000" returned bill #35961 (the most
+    # recent bill, ignoring the explicit number) on one run, and on another
+    # matched WHERE total_amount = 1000 (misreading the bill number as a
+    # money amount) instead of transaction_id.
+    from retail_llm.repair import fix_explicit_bill_number
+
+    wrong_column = ("SELECT t.transaction_id AS bill_no FROM transactions t "
+                    "WHERE t.total_amount = 1000 LIMIT 1")
+    fixed = fix_explicit_bill_number("show me tha bill 1000", wrong_column)
+    assert "transaction_id = 1000" in fixed and "total_amount = 1000" not in fixed
+
+    ignored_number = ("SELECT t.transaction_id AS bill_no FROM transactions t "
+                      "ORDER BY t.transaction_id DESC LIMIT 1")
+    fixed2 = fix_explicit_bill_number("show me tha bill 1000", ignored_number)
+    assert "transaction_id = 1000" in fixed2
+    rows = run_readonly(fixed2)
+    assert len(rows) == 1 and rows[0]["bill_no"] == 1000
+
+    # already-correct SQL is left untouched
+    good = "SELECT transaction_id FROM transactions WHERE transaction_id = 1000"
+    assert fix_explicit_bill_number("show me tha bill 1000", good) == good
+
+    # an ambiguous "show bill" with no number is left for the other fix
+    assert fix_explicit_bill_number("show bill", "SELECT 1 FROM transactions") == \
+        "SELECT 1 FROM transactions"
+
+
 def test_ambiguous_bill_sql_gets_transaction_id_filter():
     from retail_llm.repair import ambiguous_single_bill_request, fix_ambiguous_bill_sql
     bad_sql = ("SELECT t.transaction_id AS bill_no, p.name AS item FROM transactions t "

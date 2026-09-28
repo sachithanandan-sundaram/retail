@@ -235,6 +235,40 @@ def ambiguous_single_bill_request(question: str, sql: str):
             "still join transaction_items/products for the full line-item detail.")
 
 
+_BILL_NUMBER_EXTRACT_RE = re.compile(
+    r"\b(?:bill|invoice|receipt|transaction|order)\s*(?:no\.?|number)?\s*#?\s*(\d+)\b|#(\d+)\b",
+    re.I)
+
+
+def fix_explicit_bill_number(question: str, sql: str) -> str:
+    """The mirror case of ambiguous_single_bill_request: the question DOES
+    name a specific bill number, but the model doesn't reliably use it --
+    observed failures include reading "1000" as a total_amount filter
+    instead of transaction_id, and defaulting to the most recent bill
+    (ORDER BY transaction_id DESC LIMIT 1) even though a number was given.
+    Force the WHERE filter to the exact number named."""
+    if not _SINGLE_BILL_RE.search(question):
+        return sql
+    m = _BILL_NUMBER_EXTRACT_RE.search(question)
+    if not m:
+        return sql
+    num = m.group(1) or m.group(2)
+    tbl_m = re.search(r"\bFROM\s+transactions\s+(?:AS\s+)?(\w+)\b", sql, re.I)
+    alias = tbl_m.group(1) if tbl_m and tbl_m.group(1).lower() not in _RESERVED_ALIAS_WORDS \
+        else "transactions"
+    if _where_clause(sql).strip() == f"{alias}.transaction_id = {num}" or \
+       re.search(rf"\btransaction_id\s*=\s*{num}\b", _where_clause(sql)):
+        return sql  # already correct
+    filt = f"{alias}.transaction_id = {num}"
+    if re.search(r"\bWHERE\b", sql, re.I):
+        return re.sub(r"\bWHERE\b.*?(?=\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
+                      f"WHERE {filt} ", sql, count=1, flags=re.I | re.S)
+    m2 = re.search(r"\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.I)
+    if m2:
+        return sql[:m2.start()] + f"WHERE {filt} " + sql[m2.start():]
+    return sql + f" WHERE {filt}"
+
+
 def fix_ambiguous_bill_sql(question: str, sql: str) -> str:
     """Deterministic safety net for ambiguous_single_bill_request: a 3B model
     doesn't reliably reproduce the exact MAX(transaction_id) subquery from
