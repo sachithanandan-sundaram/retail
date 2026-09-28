@@ -180,6 +180,39 @@ def test_repair_product_id_literal_fixes_copied_example_id():
     assert repair_product_id_literal(joined, "Price of pro paneer 200g") == (joined, None)
 
 
+def test_missing_group_by_detects_and_fixes_the_sqlite_trap():
+    # regression: "give the list of counter persons we have" returned "We
+    # have 1 counter person, Karan Singh" with a total of Rs 1,55,06,268 --
+    # SQLite silently allowed a plain column (name) alongside an aggregate
+    # (SUM) with no GROUP BY, collapsing every cashier into one row and
+    # summing everyone's revenue under just the first cashier's name.
+    from retail_llm.repair import fix_missing_group_by, missing_group_by
+    bad = ("SELECT name, SUM(t.total_amount) FROM staff s JOIN transactions t "
+           "ON t.cashier_id = s.staff_id WHERE s.role = 'CASHIER'")
+    assert missing_group_by(bad)
+    fixed = fix_missing_group_by(bad)
+    assert "GROUP BY" in fixed
+    rows = run_readonly(fixed)
+    assert len(rows) > 1  # one row per cashier now, not one collapsed row
+    names = {r["name"] for r in rows}
+    assert len(names) == len(rows)  # each row is a genuinely distinct cashier
+
+    # only-aggregate and already-grouped queries are never flagged
+    assert not missing_group_by("SELECT ROUND(SUM(total_amount),2) AS revenue FROM transactions")
+    assert not missing_group_by(
+        "SELECT s.name, SUM(t.total_amount) FROM staff s JOIN transactions t "
+        "ON t.cashier_id = s.staff_id GROUP BY s.staff_id")
+
+    # a correlated subquery column is a different, legitimate pattern
+    profile_sql = ("SELECT c.customer_id, c.name, "
+                   "(SELECT p.category FROM transaction_items ti JOIN transactions t "
+                   "ON t.transaction_id = ti.transaction_id JOIN products p "
+                   "ON p.product_id = ti.product_id WHERE t.customer_id = c.customer_id "
+                   "GROUP BY p.category ORDER BY SUM(ti.quantity) DESC LIMIT 1) AS favourite "
+                   "FROM customers c WHERE c.customer_id = 1234")
+    assert not missing_group_by(profile_sql)
+
+
 def test_fix_types_count_query_resolves_correctly():
     # regression: "how many types of paneer" returned 279 (the whole
     # catalogue -- the model's SQL had no WHERE filter at all), and "how many

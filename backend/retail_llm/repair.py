@@ -306,6 +306,97 @@ def fix_undefined_alias(sql: str) -> str:
     return sql[:m.end(1)] + f" {next(iter(refs))}" + sql[m.end(1):]
 
 
+_AGG_FUNC_RE = re.compile(r"\b(COUNT|SUM|AVG|MIN|MAX)\s*\(", re.I)
+
+
+def _top_level_parts(text: str):
+    """Split `text` on commas that sit at paren-depth 0."""
+    depth, cur, parts = 0, "", []
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    return parts
+
+
+def _outer_select_list(sql: str):
+    """The SELECT ... list up to the top-level (paren-depth 0) FROM keyword,
+    correctly skipping any FROM inside a nested subquery. None if this isn't
+    a plain SELECT ... FROM query."""
+    m = re.match(r"(?is)^\s*SELECT\s+", sql)
+    if not m:
+        return None
+    depth, i = 0, m.end()
+    while i < len(sql):
+        ch = sql[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and sql[i:i + 4].upper() == "FROM" and \
+                (i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] == "_")) and \
+                (i + 4 >= len(sql) or not (sql[i + 4].isalnum() or sql[i + 4] == "_")):
+            return sql[m.end():i].strip()
+        i += 1
+    return None
+
+
+def _plain_and_agg_parts(sql: str):
+    """-> (plain_column_expressions, has_top_level_aggregate). A correlated
+    subquery column (`(SELECT ...)`) is neither -- it's a legitimate,
+    different pattern and is ignored by this classification entirely."""
+    select_list = _outer_select_list(sql)
+    if not select_list:
+        return [], False
+    plain, has_agg = [], False
+    for part in _top_level_parts(select_list):
+        p = part.strip()
+        if not p or p.startswith("("):
+            continue
+        if _AGG_FUNC_RE.search(p):
+            has_agg = True
+        else:
+            plain.append(p)
+    return plain, has_agg
+
+
+def missing_group_by(sql: str) -> bool:
+    """A SELECT mixing a plain column with a direct (non-subquery) aggregate
+    call and no GROUP BY is a classic SQLite trap: standard SQL rejects this,
+    but SQLite silently allows it -- it picks the plain column's value from
+    ONE arbitrary row while the aggregate is computed across ALL matching
+    rows. E.g. `SELECT name, SUM(total_amount) FROM staff JOIN transactions
+    ...` collapses every cashier into one row, naming only the first one but
+    summing everyone's revenue under their name."""
+    if re.search(r"\bGROUP\s+BY\b", sql, re.I):
+        return False
+    plain, has_agg = _plain_and_agg_parts(sql)
+    return bool(plain) and has_agg
+
+
+def fix_missing_group_by(sql: str) -> str:
+    """Deterministic safety net for missing_group_by: insert GROUP BY on the
+    plain columns directly, rather than trust a self-correction retry to add
+    it correctly -- the model doesn't always converge on this from feedback
+    alone (same lesson as the ambiguous-bill and undefined-alias fixes)."""
+    if not missing_group_by(sql):
+        return sql
+    plain, _ = _plain_and_agg_parts(sql)
+    group_cols = [re.sub(r"(?i)\s+AS\s+\w+$", "", p).strip() for p in plain]
+    group_by = "GROUP BY " + ", ".join(group_cols)
+    m = re.search(r"\b(ORDER\s+BY|LIMIT)\b", sql, re.I)
+    if m:
+        return sql[:m.start()] + group_by + " " + sql[m.start():]
+    return sql.rstrip().rstrip(";") + " " + group_by
+
+
 def wrong_time_grouping(question: str, sql: str):
     """'time of day' wants an hour grouping; 'day of week' wants weekday."""
     q = question.lower()
@@ -339,6 +430,11 @@ def diagnose(question: str, sql: str, has_range: bool | None = None):
     wc = wrong_category_source(question, sql)
     if wc:
         return wc
+    if missing_group_by(sql):
+        return ("the SELECT mixes a plain column with an aggregate (SUM/COUNT/AVG/...) but has "
+                "no GROUP BY -- SQLite silently picks one arbitrary row's value for the plain "
+                "column while the aggregate sums/counts across ALL matching rows. Add GROUP BY "
+                "on the plain, non-aggregate column(s).")
     if needs_aggregation(question, sql):
         return ("This question asks for a computed figure (count/total/average/"
                 "ranking) but the SQL only filters rows. Use COUNT/SUM/AVG and "

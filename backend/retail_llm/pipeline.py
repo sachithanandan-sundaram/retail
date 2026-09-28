@@ -22,7 +22,7 @@ from . import tools
 from .config import now
 from .db import run_readonly
 from .dates import extract_range, label
-from .repair import ValidationError, diagnose, fix_ambiguous_bill_sql, fix_undefined_alias, validate_sql
+from .repair import ValidationError, diagnose, fix_ambiguous_bill_sql, fix_missing_group_by, fix_undefined_alias, validate_sql
 from .schema_prompt import answer_prompt, query_prompt
 
 
@@ -298,6 +298,7 @@ def _plan(question, history, stages):
                 link_note = f'{link_note}; {id_note}' if link_note else id_note
             raw_sql = fix_ambiguous_bill_sql(question, raw_sql)
             raw_sql = fix_undefined_alias(raw_sql)
+            raw_sql = fix_missing_group_by(raw_sql)
             sql = validate_sql(raw_sql)
         except (QueryError, ValidationError) as e:
             problem = f"the query was invalid ({e})"
@@ -374,6 +375,7 @@ def _resolve(question, history):
             new_sql, _ = tools.fix_types_count_query(question, new_sql)
             new_sql = fix_ambiguous_bill_sql(question, new_sql)
             new_sql = fix_undefined_alias(new_sql)
+            new_sql = fix_missing_group_by(new_sql)
             new_sql = validate_sql(new_sql)
             new_rows = run_readonly(new_sql, ())
         except Exception:
