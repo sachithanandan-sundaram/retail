@@ -178,6 +178,19 @@ def test_validate_rejects_writes():
             validate_sql(bad)
 
 
+def test_validate_rejects_sqlite_master_introspection():
+    # regression: a benchmark run found the model could be prompted into
+    # reproducing a schema-introspection subquery ("... = (SELECT sql FROM
+    # sqlite_master LIMIT 1)") verbatim, and validate_sql let it through
+    # since it's technically a read-only SELECT with no write keyword.
+    for bad in ["SELECT COUNT(*) FROM transactions WHERE exception_type = "
+                "(SELECT sql FROM sqlite_master LIMIT 1)",
+                "SELECT * FROM sqlite_master",
+                "SELECT * FROM sqlite_temp_master"]:
+        with pytest.raises(Exception):
+            validate_sql(bad)
+
+
 def test_validate_enforces_limit():
     out = validate_sql("SELECT * FROM products")
     assert re.search(r"limit\s+\d+", out, re.I)

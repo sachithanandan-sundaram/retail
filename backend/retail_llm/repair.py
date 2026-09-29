@@ -10,7 +10,8 @@ from .config import MAX_ROWS
 
 _WRITE_KEYWORDS = re.compile(
     r"\b(insert|update|delete|drop|alter|create|replace|attach|detach|"
-    r"pragma|vacuum|reindex|analyze)\b", re.I)
+    r"pragma|vacuum|reindex|analyze|load_extension)\b|"
+    r"\bsqlite_(?:master|temp_master|schema|temp_schema)\b", re.I)
 _AGG_RE = re.compile(r"\b(count|sum|avg|min|max|group\s+by)\b", re.I)
 
 CATEGORIES = [

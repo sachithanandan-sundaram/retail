@@ -1,0 +1,19 @@
+{
+  "14": {
+    "id": 14,
+    "title": "Power and Resource Usage (GPU only, no RAPL)",
+    "status": "ran",
+    "idle_w_avg": 6.8,
+    "load_w_avg": 163.3,
+    "headline": "idle=6.8W load=163.3W"
+  },
+  "23": {
+    "id": 23,
+    "title": "Joules per Token (approx token count from word count)",
+    "status": "ran (approximate)",
+    "total_tokens_est": 913,
+    "total_time_s": 21.69,
+    "joules_per_token": 3.879,
+    "headline": "~3.879 J/token"
+  }
+}
